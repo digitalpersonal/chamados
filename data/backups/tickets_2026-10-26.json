@@ -1,15 +1,1 @@
-[
-  {
-    "id": "t-teste-prod",
-    "code": "CH-2026-001",
-    "title": "Chamado Teste Produção",
-    "description": "Teste de gravação permanente no banco de dados",
-    "equipmentType": "Computador",
-    "department": "Secretaria de Administração",
-    "status": "Aberto",
-    "priority": "Alta",
-    "createdAt": "2026-10-26T12:00:00.000Z",
-    "updatedAt": "2026-10-26T12:00:00.000Z",
-    "notes": []
-  }
-]
+[]

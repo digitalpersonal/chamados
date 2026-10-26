@@ -25,6 +25,32 @@ const DEPARTMENTS_FILE = path.join(DATA_DIR, 'departments.json');
 const TICKETS_FILE = path.join(DATA_DIR, 'tickets.json');
 const EQUIPMENT_FILE = path.join(DATA_DIR, 'equipment.json');
 const TECHNICIANS_FILE = path.join(DATA_DIR, 'technicians.json');
+const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
+
+function getStoredConfig(): { supabaseUrl?: string; supabaseAnonKey?: string } {
+  try {
+    if (fs.existsSync(CONFIG_FILE)) {
+      const content = fs.readFileSync(CONFIG_FILE, 'utf-8');
+      const parsed = JSON.parse(content);
+      if (parsed && parsed.supabaseUrl) return parsed;
+    }
+  } catch (e) {}
+
+  const url = (process.env.VITE_SUPABASE_URL || '').trim();
+  const anonKey = (process.env.VITE_SUPABASE_ANON_KEY || '').trim();
+  if (url && anonKey && !url.includes('your-project')) {
+    return { supabaseUrl: url, supabaseAnonKey: anonKey };
+  }
+  return {};
+}
+
+function saveStoredConfig(cfg: { supabaseUrl?: string; supabaseAnonKey?: string }) {
+  try {
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('Error saving config.json:', e);
+  }
+}
 
 const sortDepartments = (list: string[]): string[] =>
   [...list].sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
@@ -74,8 +100,23 @@ function getStoredTickets(): any[] {
     if (fs.existsSync(TICKETS_FILE)) {
       const content = fs.readFileSync(TICKETS_FILE, 'utf-8');
       const parsed = JSON.parse(content);
-      if (Array.isArray(parsed)) {
+      if (Array.isArray(parsed) && parsed.length > 0) {
         return parsed;
+      }
+    }
+
+    // Auto-restore from latest snapshot in backups directory if empty
+    if (fs.existsSync(BACKUPS_DIR)) {
+      const backupFiles = fs.readdirSync(BACKUPS_DIR).filter(f => f.startsWith('tickets_') && f.endsWith('.json'));
+      if (backupFiles.length > 0) {
+        backupFiles.sort().reverse();
+        const latestPath = path.join(BACKUPS_DIR, backupFiles[0]);
+        const backupContent = fs.readFileSync(latestPath, 'utf-8');
+        const parsedBackup = JSON.parse(backupContent);
+        if (Array.isArray(parsedBackup) && parsedBackup.length > 0) {
+          saveStoredTickets(parsedBackup);
+          return parsedBackup;
+        }
       }
     }
   } catch (e) {
@@ -210,6 +251,43 @@ async function startServer() {
         technicians: getStoredTechnicians(),
         departments: getStoredDepartments()
       });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Global system database credentials configuration discovery
+  app.get('/api/system/config', (req, res) => {
+    try {
+      const cfg = getStoredConfig();
+      res.json({
+        success: true,
+        supabaseUrl: cfg.supabaseUrl || '',
+        supabaseAnonKey: cfg.supabaseAnonKey || '',
+        configured: Boolean(cfg.supabaseUrl && cfg.supabaseAnonKey)
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/system/config', (req, res) => {
+    try {
+      const { supabaseUrl, supabaseAnonKey } = req.body;
+      if (!supabaseUrl || !supabaseAnonKey) {
+        return res.status(400).json({ success: false, error: 'Credenciais inválidas.' });
+      }
+      saveStoredConfig({ supabaseUrl: supabaseUrl.trim(), supabaseAnonKey: supabaseAnonKey.trim() });
+      res.json({ success: true, message: 'Configuração salva no servidor para todos os dispositivos.' });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.delete('/api/system/config', (req, res) => {
+    try {
+      saveStoredConfig({});
+      res.json({ success: true, message: 'Configuração removida.' });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }

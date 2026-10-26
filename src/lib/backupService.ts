@@ -89,7 +89,7 @@ export async function performBackup(
   let supabaseError: string | null = null;
 
   // 1. Attempt Supabase Sync (Storage Bucket + system_backups Table)
-  if (isSupabaseConfigured && supabase) {
+  if (isSupabaseConfigured() && supabase) {
     try {
       // A. Upload JSON file to Supabase Storage bucket 'backups'
       const jsonBlob = new Blob([jsonString], { type: 'application/json' });
@@ -165,7 +165,7 @@ export async function performBackup(
     supabaseSynced,
     message: supabaseSynced
       ? `Backup diário concluído com sucesso e sincronizado no Supabase!`
-      : isSupabaseConfigured
+      : isSupabaseConfigured()
       ? `Backup gerado com sucesso localmente. Aviso Supabase: ${supabaseError || 'Tabela de backup pendente'}.`
       : `Backup diário gerado e armazenado com segurança localmente (Supabase aguardando credenciais).`
   };

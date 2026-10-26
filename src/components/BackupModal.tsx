@@ -97,7 +97,7 @@ export default function BackupModal({ isOpen, onClose, data }: BackupModalProps)
               <div className="flex items-center gap-4 text-xs text-slate-300 pt-1">
                 <span>Último backup: <strong className="text-emerald-400">{lastDate ? new Date(lastDate + 'T12:00:00').toLocaleDateString('pt-BR') : 'Hoje'}</strong></span>
                 <span>•</span>
-                <span>Armazenamento: <strong className={isSupabaseConfigured ? 'text-emerald-400' : 'text-amber-400'}>{isSupabaseConfigured ? 'Supabase Conectado' : 'Local + Supabase Pronto'}</strong></span>
+                <span>Armazenamento: <strong className={isSupabaseConfigured() ? 'text-emerald-400' : 'text-amber-400'}>{isSupabaseConfigured() ? 'Supabase Conectado' : 'Local + Supabase Pronto'}</strong></span>
               </div>
             </div>
 

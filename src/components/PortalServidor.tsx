@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { EquipmentType, Priority, Ticket, TicketStatus, calculateDefaultDeadline, formatSlaDate, getSlaStatus } from '../App';
 import { saveTicketToSupabase } from '../lib/cloudDbService';
+import { fetchAndApplyServerCredentials } from '../lib/supabase';
 
 interface PortalServidorProps {
   departments: string[];
@@ -76,6 +77,10 @@ export default function PortalServidor({
     );
     return sorted[0] || 'Gabinete do Prefeito';
   });
+
+  useEffect(() => {
+    fetchAndApplyServerCredentials();
+  }, []);
 
   useEffect(() => {
     if (sortedDepartments.length > 0 && !sortedDepartments.includes(department)) {

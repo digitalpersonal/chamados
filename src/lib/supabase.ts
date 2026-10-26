@@ -4,13 +4,22 @@ export function getSupabaseCredentials(): { url: string; anonKey: string } {
   let url = (import.meta.env.VITE_SUPABASE_URL || '').trim();
   let anonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
 
+  // Ignore placeholder strings from default env templates
+  if (url.includes('your-project') || url.includes('YOUR_')) url = '';
+  if (anonKey.includes('your-supabase-anon-key') || anonKey.includes('YOUR_')) anonKey = '';
+
   if (typeof window !== 'undefined') {
     try {
       const storedUrl = localStorage.getItem('guaranesia_supabase_url');
       const storedKey = localStorage.getItem('guaranesia_supabase_anon_key');
-      if (storedUrl && !url) url = storedUrl.trim();
-      if (storedKey && !anonKey) anonKey = storedKey.trim();
+      if (storedUrl && storedUrl.trim()) url = storedUrl.trim();
+      if (storedKey && storedKey.trim()) anonKey = storedKey.trim();
     } catch (e) {}
+  }
+
+  // Clean trailing /rest/v1/ or trailing slashes if present
+  if (url) {
+    url = url.replace(/\/rest\/v1\/?$/i, '').replace(/\/+$/, '');
   }
 
   return { url, anonKey };
@@ -41,18 +50,51 @@ export function getSupabaseClient(): SupabaseClient | null {
 
 export function isSupabaseReady(): boolean {
   const { url, anonKey } = getSupabaseCredentials();
-  return Boolean(url && anonKey);
+  // Check for presence of credentials and that they aren't placeholders
+  const hasUrl = url && url.startsWith('http') && !url.includes('your-project');
+  const hasKey = anonKey && anonKey.length > 50 && !anonKey.includes('your-supabase-anon-key');
+  return Boolean(hasUrl && hasKey);
 }
+
+export const isSupabaseConfigured = () => isSupabaseReady();
 
 export function saveSupabaseCredentials(url: string, anonKey: string): boolean {
   try {
-    localStorage.setItem('guaranesia_supabase_url', url.trim());
-    localStorage.setItem('guaranesia_supabase_anon_key', anonKey.trim());
+    const cleanUrl = url.trim().replace(/\/rest\/v1\/?$/i, '').replace(/\/+$/, '');
+    const cleanKey = anonKey.trim();
+    localStorage.setItem('guaranesia_supabase_url', cleanUrl);
+    localStorage.setItem('guaranesia_supabase_anon_key', cleanKey);
     cachedClient = null;
+
+    // Send credentials to backend config so all mobile devices auto-connect
+    fetch('/api/system/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ supabaseUrl: cleanUrl, supabaseAnonKey: cleanKey })
+    }).catch(() => {});
+
     return true;
   } catch (e) {
     return false;
   }
+}
+
+export async function fetchAndApplyServerCredentials(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/system/config');
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.supabaseUrl && data.supabaseAnonKey) {
+        // Only save if local is different or empty
+        const local = getSupabaseCredentials();
+        if (local.url !== data.supabaseUrl || local.anonKey !== data.supabaseAnonKey) {
+          saveSupabaseCredentials(data.supabaseUrl, data.supabaseAnonKey);
+          return true;
+        }
+      }
+    }
+  } catch (e) {}
+  return false;
 }
 
 export function clearSupabaseCredentials(): void {
@@ -60,8 +102,8 @@ export function clearSupabaseCredentials(): void {
     localStorage.removeItem('guaranesia_supabase_url');
     localStorage.removeItem('guaranesia_supabase_anon_key');
     cachedClient = null;
+    fetch('/api/system/config', { method: 'DELETE' }).catch(() => {});
   } catch (e) {}
 }
 
-export const isSupabaseConfigured = isSupabaseReady();
 export const supabase = getSupabaseClient();

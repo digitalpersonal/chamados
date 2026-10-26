@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Cloud, CloudOff, RefreshCw, UploadCloud, DownloadCloud, Copy, 
   Check, Database, Key, Globe, AlertCircle, CheckCircle2, X, 
-  FileText, ArrowRight, ShieldCheck, Terminal
+  FileText, ArrowRight, ShieldCheck, Terminal, Search
 } from 'lucide-react';
 import { 
   getSupabaseCredentials, 
@@ -12,7 +12,7 @@ import {
   getSupabaseClient
 } from '../lib/supabase';
 import { syncWithSupabase, pushStateToSupabase } from '../lib/cloudDbService';
-import { Ticket, Equipment, Technician } from '../App';
+import { Ticket, Equipment, Technician, scanAndRecoverAllLocalStorage } from '../App';
 
 interface CloudSyncModalProps {
   isOpen: boolean;
@@ -47,7 +47,8 @@ export default function CloudSyncModal({
   const [pasteInput, setPasteInput] = useState('');
   const [pasteError, setPasteError] = useState('');
   const [pasteSuccess, setPasteSuccess] = useState(false);
-  const [activeTab, setActiveTab] = useState<'cloud' | 'clipboard' | 'vercel'>('cloud');
+  const [copiedSql, setCopiedSql] = useState(false);
+  const [activeTab, setActiveTab] = useState<'cloud' | 'clipboard' | 'sql' | 'vercel'>('cloud');
 
   useEffect(() => {
     if (isOpen) {
@@ -214,6 +215,115 @@ export default function CloudSyncModal({
     }
   };
 
+  const handleDeepScanBrowser = async () => {
+    setIsTesting(true);
+    setPasteError('');
+    try {
+      const recovered = scanAndRecoverAllLocalStorage();
+      onDataLoaded({
+        tickets: recovered.tickets.length > 0 ? recovered.tickets : undefined,
+        departments: recovered.departments.length > 0 ? recovered.departments : undefined,
+        equipment: recovered.equipment.length > 0 ? recovered.equipment : undefined,
+        technicians: recovered.technicians.length > 0 ? recovered.technicians : undefined
+      });
+
+      // If Supabase is connected, immediately push recovered items to Supabase cloud
+      const client = getSupabaseClient();
+      if (client && isSupabaseReady()) {
+        await pushStateToSupabase(client, {
+          tickets: recovered.tickets,
+          departments: recovered.departments,
+          equipment: recovered.equipment,
+          technicians: recovered.technicians
+        });
+      }
+
+      setTestResult({
+        ok: true,
+        msg: `Varredura concluída com sucesso! Recuperados ${recovered.departments.length} setores e ${recovered.tickets.length} chamados da memória do seu navegador e gravados na nuvem.`
+      });
+    } catch (err: any) {
+      setTestResult({ ok: false, msg: 'Erro ao escanear memória: ' + err.message });
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
+  const SUPABASE_SQL_SCHEMA = `-- Script SQL para Inicialização Completa do Supabase (Prefeitura de Guaranésia)
+
+CREATE TABLE IF NOT EXISTS public.system_state (
+  id TEXT PRIMARY KEY,
+  payload JSONB NOT NULL,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
+);
+
+CREATE TABLE IF NOT EXISTS public.departments (
+  name TEXT PRIMARY KEY
+);
+
+CREATE TABLE IF NOT EXISTS public.technicians (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  company TEXT,
+  phone TEXT,
+  email TEXT,
+  specialty TEXT
+);
+
+CREATE TABLE IF NOT EXISTS public.equipment (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  model TEXT,
+  serial_number TEXT,
+  department TEXT NOT NULL,
+  ip_address TEXT,
+  status TEXT DEFAULT 'Operacional'
+);
+
+CREATE TABLE IF NOT EXISTS public.tickets (
+  id TEXT PRIMARY KEY,
+  code TEXT NOT NULL,
+  equipment_id TEXT,
+  equipment_type TEXT NOT NULL,
+  department TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL,
+  status TEXT NOT NULL,
+  priority TEXT NOT NULL,
+  technician_id TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()),
+  resolution_notes TEXT,
+  cost NUMERIC DEFAULT 0,
+  deadline TEXT,
+  ai_diagnosis JSONB
+);
+
+CREATE TABLE IF NOT EXISTS public.ticket_notes (
+  id TEXT PRIMARY KEY,
+  ticket_id TEXT REFERENCES public.tickets(id) ON DELETE CASCADE,
+  author TEXT NOT NULL,
+  text TEXT NOT NULL,
+  timestamp TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
+);
+
+-- Desabilitar RLS para permitir gravação e leitura diretas sem bloqueios de permissão
+ALTER TABLE public.system_state DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.departments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.technicians DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.equipment DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.tickets DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ticket_notes DISABLE ROW LEVEL SECURITY;
+`;
+
+  const handleCopySql = () => {
+    navigator.clipboard.writeText(SUPABASE_SQL_SCHEMA);
+    setCopiedSql(true);
+    setTimeout(() => setCopiedSql(false), 3000);
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
       <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden my-auto flex flex-col max-h-[90vh]">
@@ -251,24 +361,31 @@ export default function CloudSyncModal({
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-slate-800 bg-slate-950/30 px-4 pt-2 gap-2 text-xs font-semibold">
+        <div className="flex border-b border-slate-800 bg-slate-950/30 px-4 pt-2 gap-2 text-xs font-semibold overflow-x-auto">
           <button
             onClick={() => setActiveTab('cloud')}
-            className={`pb-2.5 px-3 border-b-2 transition-colors flex items-center gap-1.5 ${activeTab === 'cloud' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+            className={`pb-2.5 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 ${activeTab === 'cloud' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
           >
             <Cloud className="w-3.5 h-3.5" />
             <span>Conexão Supabase</span>
           </button>
           <button
+            onClick={() => setActiveTab('sql')}
+            className={`pb-2.5 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 ${activeTab === 'sql' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+          >
+            <Database className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Criar Tabelas (SQL)</span>
+          </button>
+          <button
             onClick={() => setActiveTab('clipboard')}
-            className={`pb-2.5 px-3 border-b-2 transition-colors flex items-center gap-1.5 ${activeTab === 'clipboard' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+            className={`pb-2.5 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 ${activeTab === 'clipboard' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
           >
             <Copy className="w-3.5 h-3.5" />
             <span>Copiar / Restaurar Dados</span>
           </button>
           <button
             onClick={() => setActiveTab('vercel')}
-            className={`pb-2.5 px-3 border-b-2 transition-colors flex items-center gap-1.5 ${activeTab === 'vercel' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+            className={`pb-2.5 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 ${activeTab === 'vercel' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
           >
             <Terminal className="w-3.5 h-3.5" />
             <span>Guia Vercel</span>
@@ -344,52 +461,100 @@ export default function CloudSyncModal({
               )}
 
               {/* Cloud Sync Actions */}
-              {isConnected && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-                  <button
-                    type="button"
-                    onClick={handlePushToCloud}
-                    disabled={isTesting}
-                    className="p-3 bg-slate-950 border border-emerald-500/30 rounded-xl hover:border-emerald-500 transition-all text-left flex items-start gap-3 group"
-                  >
-                    <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
-                      <UploadCloud className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <h4 className="text-xs font-bold text-white group-hover:text-emerald-400 transition-colors">
-                        Enviar Dados para a Nuvem
-                      </h4>
-                      <p className="text-[11px] text-slate-400 mt-0.5">
-                        Transfere os {tickets.length} chamados e {departments.length} setores desta tela diretamente para o banco Supabase.
-                      </p>
-                    </div>
-                  </button>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={handlePushToCloud}
+                  disabled={isTesting}
+                  className="p-3 bg-slate-950 border border-emerald-500/30 rounded-xl hover:border-emerald-500 transition-all text-left flex items-start gap-2.5 group"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                    <UploadCloud className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-white group-hover:text-emerald-400 transition-colors">
+                      Enviar para a Nuvem
+                    </h4>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      Envia {tickets.length} chamados e {departments.length} setores para o Supabase.
+                    </p>
+                  </div>
+                </button>
 
-                  <button
-                    type="button"
-                    onClick={handlePullFromCloud}
-                    disabled={isTesting}
-                    className="p-3 bg-slate-950 border border-cyan-500/30 rounded-xl hover:border-cyan-500 transition-all text-left flex items-start gap-3 group"
-                  >
-                    <div className="w-8 h-8 rounded-lg bg-cyan-500/20 text-cyan-400 flex items-center justify-center shrink-0">
-                      <DownloadCloud className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <h4 className="text-xs font-bold text-white group-hover:text-cyan-400 transition-colors">
-                        Baixar Dados da Nuvem
-                      </h4>
-                      <p className="text-[11px] text-slate-400 mt-0.5">
-                        Puxa os chamados mais recentes cadastrados em produção para esta tela.
-                      </p>
-                    </div>
-                  </button>
-                </div>
-              )}
+                <button
+                  type="button"
+                  onClick={handlePullFromCloud}
+                  disabled={isTesting}
+                  className="p-3 bg-slate-950 border border-cyan-500/30 rounded-xl hover:border-cyan-500 transition-all text-left flex items-start gap-2.5 group"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-cyan-500/20 text-cyan-400 flex items-center justify-center shrink-0">
+                    <DownloadCloud className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-white group-hover:text-cyan-400 transition-colors">
+                      Baixar da Nuvem
+                    </h4>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      Puxa do Supabase para esta tela.
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleDeepScanBrowser}
+                  disabled={isTesting}
+                  className="p-3 bg-slate-950 border border-purple-500/30 rounded-xl hover:border-purple-500 transition-all text-left flex items-start gap-2.5 group"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-purple-500/20 text-purple-400 flex items-center justify-center shrink-0">
+                    <Search className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-white group-hover:text-purple-400 transition-colors">
+                      Escanear Memória
+                    </h4>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      Varre o navegador e recupera setores e chamados anteriores.
+                    </p>
+                  </div>
+                </button>
+              </div>
             </div>
           )}
 
-          {/* TAB 2: CLIPBOARD EXPORT / IMPORT */}
-          {activeTab === 'clipboard' && (
+          {/* TAB SQL: SCRIPT FOR SUPABASE SQL EDITOR */}
+          {activeTab === 'sql' && (
+    <div className="space-y-4">
+      <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4 space-y-3">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div>
+            <h4 className="text-xs sm:text-sm font-bold text-white flex items-center gap-1.5">
+              <Database className="w-4 h-4 text-cyan-400" />
+              <span>Script SQL para o Supabase</span>
+            </h4>
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              Copie o código abaixo, acesse o painel do Supabase &gt; <strong>SQL Editor</strong> &gt; <strong>New Query</strong>, cole e clique em <strong>Run</strong>.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleCopySql}
+            className="px-3.5 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow"
+          >
+            {copiedSql ? <Check className="w-3.5 h-3.5 text-emerald-300" /> : <Copy className="w-3.5 h-3.5" />}
+            <span>{copiedSql ? 'SQL Copiado com Sucesso!' : 'Copiar Script SQL'}</span>
+          </button>
+        </div>
+
+        <pre className="p-3 bg-slate-950 border border-slate-800 rounded-lg text-[10px] sm:text-xs text-cyan-300 font-mono overflow-x-auto max-h-56 leading-relaxed">
+          {SUPABASE_SQL_SCHEMA}
+        </pre>
+      </div>
+    </div>
+  )}
+
+  {/* TAB 2: CLIPBOARD EXPORT / IMPORT */}
+  {activeTab === 'clipboard' && (
             <div className="space-y-4">
               <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4 space-y-3">
                 <div className="flex items-center justify-between gap-2 flex-wrap">

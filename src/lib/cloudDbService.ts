@@ -31,14 +31,16 @@ export async function syncWithSupabase(localState: {
     return null;
   }
 
+  console.log('--- Inicidando Sincronização Supabase ---');
+
   try {
     let cloudTickets: Ticket[] = [];
     let cloudDepartments: string[] = [];
     let cloudEquipment: Equipment[] = [];
     let cloudTechnicians: Technician[] = [];
-    let stateFound = false;
+    let tablesMissing = false;
 
-    // 1. Try reading the unified system_state table first (fastest and most resilient)
+    // 1. Try reading the unified system_state table
     try {
       const { data: stateData, error: stateError } = await client
         .from('system_state')
@@ -46,83 +48,96 @@ export async function syncWithSupabase(localState: {
         .eq('id', 'guaranesia_production_state')
         .maybeSingle();
 
-      if (!stateError && stateData && stateData.payload) {
-        stateFound = true;
+      if (stateError) {
+        if (stateError.code === '42P01') tablesMissing = true;
+        console.warn('system_state read error:', stateError);
+      } else if (stateData && stateData.payload) {
         const p = stateData.payload;
         if (Array.isArray(p.tickets)) cloudTickets = p.tickets;
         if (Array.isArray(p.departments)) cloudDepartments = p.departments;
         if (Array.isArray(p.equipment)) cloudEquipment = p.equipment;
         if (Array.isArray(p.technicians)) cloudTechnicians = p.technicians;
+        console.log(`Payload system_state carregado: ${cloudTickets.length} chamados.`);
       }
     } catch (e) {
-      // system_state table might not exist yet, proceed to individual tables
+      console.warn('system_state catch notice:', e);
     }
 
-    // 2. If system_state was not found or was empty, read individual tables
-    if (!stateFound || (cloudTickets.length === 0 && cloudDepartments.length === 0)) {
-      // A. Departments
-      try {
-        const { data: deptData, error: deptError } = await client
-          .from('departments')
-          .select('name');
-        if (!deptError && Array.isArray(deptData) && deptData.length > 0) {
-          cloudDepartments = deptData.map(d => d.name).filter(Boolean);
-        }
-      } catch (e) {}
+    // 2. ALSO query individual structured tables and merge with system_state payload
+    // A. Departments
+    try {
+      const { data: deptData, error: dErr } = await client.from('departments').select('name');
+      if (!dErr && Array.isArray(deptData) && deptData.length > 0) {
+        const setDepts = new Set<string>([...cloudDepartments, ...deptData.map(d => d.name).filter(Boolean)]);
+        cloudDepartments = Array.from(setDepts);
+      }
+    } catch (e) {}
 
-      // B. Technicians
-      try {
-        const { data: techData, error: techError } = await client
-          .from('technicians')
-          .select('*');
-        if (!techError && Array.isArray(techData)) {
-          cloudTechnicians = techData.map(t => ({
-            id: t.id,
-            name: t.name,
-            type: t.type,
-            company: t.company || undefined,
-            phone: t.phone || '',
-            email: t.email || '',
-            specialty: t.specialty || ''
-          }));
-        }
-      } catch (e) {}
+    // B. Technicians
+    try {
+      const { data: techData, error: tErr } = await client.from('technicians').select('*');
+      if (!tErr && Array.isArray(techData)) {
+        const techMap = new Map<string, Technician>();
+        cloudTechnicians.forEach(t => techMap.set(t.id, t));
+        techData.forEach(t => {
+          if (t && t.id) {
+            techMap.set(t.id, {
+              id: t.id,
+              name: t.name,
+              type: t.type as any,
+              company: t.company || undefined,
+              phone: t.phone || '',
+              email: t.email || '',
+              specialty: t.specialty || ''
+            });
+          }
+        });
+        cloudTechnicians = Array.from(techMap.values());
+      }
+    } catch (e) {}
 
-      // C. Equipment
-      try {
-        const { data: eqData, error: eqError } = await client
-          .from('equipment')
-          .select('*');
-        if (!eqError && Array.isArray(eqData)) {
-          cloudEquipment = eqData.map(eq => ({
-            id: eq.id,
-            name: eq.name,
-            type: eq.type,
-            model: eq.model || '',
-            serialNumber: eq.serial_number || '',
-            department: eq.department,
-            ipAddress: eq.ip_address || '',
-            status: eq.status || 'Operacional'
-          }));
-        }
-      } catch (e) {}
+    // C. Equipment
+    try {
+      const { data: eqData, error: eErr } = await client.from('equipment').select('*');
+      if (!eErr && Array.isArray(eqData)) {
+        const eqMap = new Map<string, Equipment>();
+        cloudEquipment.forEach(eq => eqMap.set(eq.id, eq));
+        eqData.forEach(eq => {
+          if (eq && eq.id) {
+            eqMap.set(eq.id, {
+              id: eq.id,
+              name: eq.name,
+              type: eq.type as any,
+              model: eq.model || '',
+              serialNumber: eq.serial_number || '',
+              department: eq.department,
+              ipAddress: eq.ip_address || '',
+              status: eq.status as any || 'Operacional'
+            });
+          }
+        });
+        cloudEquipment = Array.from(eqMap.values());
+      }
+    } catch (e) {}
 
-      // D. Tickets
-      try {
-        const { data: tData, error: tError } = await client
-          .from('tickets')
-          .select('*')
-          .order('created_at', { ascending: false });
+    // D. Tickets
+    try {
+      const { data: tData, error: tkErr } = await client
+        .from('tickets')
+        .select('*')
+        .order('created_at', { ascending: false });
 
-        if (!tError && Array.isArray(tData)) {
-          // Fetch notes
-          const { data: notesData } = await client
-            .from('ticket_notes')
-            .select('*');
-
-          const notesByTicket: Record<string, any[]> = {};
-          if (Array.isArray(notesData)) {
-            notesData.forEach(n => {
+      if (tkErr) {
+        if (tkErr.code === '42P01') tablesMissing = true;
+        console.warn('tickets read error:', tkErr);
+      } else if (Array.isArray(tData)) {
+        console.log(`Tabela tickets carregada: ${tData.length} registros.`);
+        // Fetch notes
+        const { data: notesData } = await client.from('ticket_notes').select('*');
+        const notesByTicket: Record<string, any[]> = {};
+        if (Array.isArray(notesData)) {
+          notesData.forEach(n => {
+            if (n && n.ticket_id) {
               if (!notesByTicket[n.ticket_id]) notesByTicket[n.ticket_id] = [];
               notesByTicket[n.ticket_id].push({
                 id: n.id,
@@ -130,34 +145,43 @@ export async function syncWithSupabase(localState: {
                 text: n.text,
                 timestamp: n.timestamp
               });
+            }
+          });
+        }
+
+        const tMap = new Map<string, Ticket>();
+        cloudTickets.forEach(t => tMap.set(t.id, t));
+
+        tData.forEach(t => {
+          if (t && t.id) {
+            tMap.set(t.id, {
+              id: t.id,
+              code: t.code,
+              equipmentId: t.equipment_id || undefined,
+              equipmentType: t.equipment_type as any,
+              department: t.department,
+              title: t.title,
+              description: t.description,
+              status: t.status as any,
+              priority: t.priority as any,
+              technicianId: t.technician_id || undefined,
+              createdAt: t.created_at,
+              updatedAt: t.updated_at,
+              deadline: t.deadline || undefined,
+              notes: notesByTicket[t.id] || [],
+              partsUsed: t.parts_used || [],
+              resolutionNotes: t.resolution_notes || undefined,
+              cost: t.cost ? Number(t.cost) : undefined,
+              aiDiagnosis: t.ai_diagnosis || undefined
             });
           }
+        });
+        cloudTickets = Array.from(tMap.values());
+      }
+    } catch (e) {}
 
-          cloudTickets = tData.map(t => ({
-            id: t.id,
-            code: t.code,
-            equipmentId: t.equipment_id || undefined,
-            equipmentType: t.equipment_type,
-            department: t.department,
-            title: t.title,
-            description: t.description,
-            status: t.status,
-            priority: t.priority,
-            technicianId: t.technician_id || undefined,
-            createdAt: t.created_at,
-            updatedAt: t.updated_at,
-            deadline: t.deadline || undefined,
-            notes: notesByTicket[t.id] || [],
-            partsUsed: t.parts_used || [],
-            resolutionNotes: t.resolution_notes || undefined,
-            cost: t.cost ? Number(t.cost) : undefined,
-            aiDiagnosis: t.ai_diagnosis || undefined
-          }));
-        }
-      } catch (e) {}
-    }
-
-    // 3. Bidirectional merge: combine cloud data with any local state
+    // 3. Bidirectional merge
+    // Use cloud data as primary, but keep any local data that is newer or missing in cloud
     const mergedDeptsSet = new Set<string>([...cloudDepartments, ...localState.departments]);
     const mergedDepartments = sortDepartments(Array.from(mergedDeptsSet));
 
@@ -189,17 +213,28 @@ export async function syncWithSupabase(localState: {
       new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
     );
 
-    // 4. Update cloud state mirror with complete merged state so all environments sync
-    await pushStateToSupabase(client, {
-      tickets: mergedTickets,
-      departments: mergedDepartments,
-      equipment: mergedEquipment,
-      technicians: mergedTechnicians
-    });
+    // 4. Update cloud state mirror ONLY IF we have something to push or if we found existing data
+    if (mergedTickets.length > 0 || cloudTickets.length > 0) {
+      await pushStateToSupabase(client, {
+        tickets: mergedTickets,
+        departments: mergedDepartments,
+        equipment: mergedEquipment,
+        technicians: mergedTechnicians
+      });
+    }
+
+    if (tablesMissing && cloudTickets.length === 0) {
+      return {
+        success: false,
+        message: 'Conectado ao Supabase, mas as tabelas ainda não foram criadas no banco de dados. Use a aba "Criar Tabelas (SQL)" no modal de sincronização.',
+        source: 'supabase',
+        error: 'Tabelas não encontradas'
+      };
+    }
 
     return {
       success: true,
-      message: `Conectado ao Supabase! ${mergedTickets.length} chamados e ${mergedDepartments.length} setores sincronizados na nuvem.`,
+      message: `Conectado ao Supabase! ${mergedTickets.length} chamados sincronizados na nuvem.`,
       source: 'supabase',
       tickets: mergedTickets,
       departments: mergedDepartments,
@@ -207,7 +242,7 @@ export async function syncWithSupabase(localState: {
       technicians: mergedTechnicians
     };
   } catch (err: any) {
-    console.warn('Supabase sync error:', err);
+    console.warn('Supabase sync critical error:', err);
     return {
       success: false,
       message: 'Falha ao sincronizar com o Supabase: ' + (err.message || 'Erro de rede'),

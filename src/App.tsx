@@ -13,7 +13,7 @@ import {
   Globe, Volume2, VolumeX, Bell, BellRing, Link2, ExternalLink, Copy, Check, LogOut,
   FileSpreadsheet, Package, Tag, Cpu, Wifi, Network, Cable, X, Cloud
 } from 'lucide-react';
-import { supabase, isSupabaseConfigured, isSupabaseReady } from './lib/supabase';
+import { supabase, isSupabaseReady, fetchAndApplyServerCredentials } from './lib/supabase';
 import { 
   syncWithSupabase, 
   saveTicketToSupabase, 
@@ -200,6 +200,101 @@ export const isoToDatetimeLocal = (isoStr?: string): string => {
   }
 };
 
+export function scanAndRecoverAllLocalStorage(): {
+  tickets: Ticket[];
+  departments: string[];
+  equipment: Equipment[];
+  technicians: Technician[];
+} {
+  const recoveredTickets: Ticket[] = [];
+  const recoveredDepts = new Set<string>();
+  const recoveredEq: Equipment[] = [];
+  const recoveredTechs: Technician[] = [];
+
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return { tickets: [], departments: [], equipment: [], technicians: [] };
+  }
+
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      const val = localStorage.getItem(key);
+      if (!val) continue;
+
+      try {
+        const parsed = JSON.parse(val);
+
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          if (typeof parsed[0] === 'string') {
+            parsed.forEach((d: string) => {
+              if (d && typeof d === 'string' && d.trim().length > 2) {
+                recoveredDepts.add(d.trim());
+              }
+            });
+          } else if (typeof parsed[0] === 'object') {
+            parsed.forEach((item: any) => {
+              if (!item) return;
+              if (item.id && (item.code || item.title || item.status)) {
+                if (!recoveredTickets.some(t => t.id === item.id)) {
+                  recoveredTickets.push(item);
+                }
+                if (item.department && typeof item.department === 'string') {
+                  recoveredDepts.add(item.department.trim());
+                }
+              } else if (item.id && item.name && item.type && item.department) {
+                if (!recoveredEq.some(eq => eq.id === item.id)) {
+                  recoveredEq.push(item);
+                }
+                recoveredDepts.add(item.department.trim());
+              } else if (item.id && item.name && (item.specialty || item.type)) {
+                if (!recoveredTechs.some(tech => tech.id === item.id)) {
+                  recoveredTechs.push(item);
+                }
+              }
+            });
+          }
+        } else if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          if (Array.isArray(parsed.departments)) {
+            parsed.departments.forEach((d: any) => {
+              if (typeof d === 'string' && d.trim()) recoveredDepts.add(d.trim());
+            });
+          }
+          if (Array.isArray(parsed.tickets)) {
+            parsed.tickets.forEach((item: any) => {
+              if (item && item.id && !recoveredTickets.some(t => t.id === item.id)) {
+                recoveredTickets.push(item);
+              }
+              if (item && item.department) recoveredDepts.add(item.department.trim());
+            });
+          }
+          if (Array.isArray(parsed.equipment)) {
+            parsed.equipment.forEach((item: any) => {
+              if (item && item.id && !recoveredEq.some(eq => eq.id === item.id)) {
+                recoveredEq.push(item);
+              }
+            });
+          }
+          if (Array.isArray(parsed.technicians)) {
+            parsed.technicians.forEach((item: any) => {
+              if (item && item.id && !recoveredTechs.some(tc => tc.id === item.id)) {
+                recoveredTechs.push(item);
+              }
+            });
+          }
+        }
+      } catch (e) {}
+    }
+  } catch (e) {}
+
+  return {
+    tickets: recoveredTickets,
+    departments: Array.from(recoveredDepts),
+    equipment: recoveredEq,
+    technicians: recoveredTechs
+  };
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'tickets' | 'equipment' | 'technicians' | 'departments'>('dashboard');
   
@@ -345,39 +440,32 @@ export default function App() {
         console.warn('Error reading local cache on startup:', e);
       }
 
-      // If manual scan or empty tickets, search all localStorage keys for any stored tickets from earlier sessions
-      if (manualScan || localTickets.length === 0) {
-        try {
-          if (typeof window !== 'undefined' && window.localStorage) {
-            for (let i = 0; i < localStorage.length; i++) {
-              const key = localStorage.key(i);
-              if (key && (key.includes('ticket') || key.includes('backup') || key.includes('guaranesia'))) {
-                try {
-                  const val = localStorage.getItem(key);
-                  if (val && (val.includes('"code"') || val.includes('CH-2026') || val.includes('"department"'))) {
-                    const parsed = JSON.parse(val);
-                    if (Array.isArray(parsed)) {
-                      parsed.forEach(item => {
-                        if (item && item.id && item.code && !localTickets.some(lt => lt.id === item.id)) {
-                          localTickets.push(item);
-                        }
-                      });
-                    } else if (parsed && parsed.data && Array.isArray(parsed.data.tickets)) {
-                      parsed.data.tickets.forEach((item: any) => {
-                        if (item && item.id && !localTickets.some(lt => lt.id === item.id)) {
-                          localTickets.push(item);
-                        }
-                      });
-                    }
-                  }
-                } catch (e) {}
-              }
-            }
-          }
-        } catch (e) {
-          console.warn('Storage scanner notice:', e);
+      // Always perform deep scan across all local storage keys to recover any departments/tickets
+      const deepScan = scanAndRecoverAllLocalStorage();
+      
+      // Merge deep scanned departments into localDepts
+      const mergedDeptsSet = new Set<string>([...localDepts, ...departments, ...deepScan.departments]);
+      localDepts = Array.from(mergedDeptsSet);
+
+      // Merge deep scanned tickets into localTickets
+      deepScan.tickets.forEach(st => {
+        if (!localTickets.some(lt => lt.id === st.id)) {
+          localTickets.push(st);
         }
-      }
+      });
+      deepScan.equipment.forEach(seq => {
+        if (!localEq.some(leq => leq.id === seq.id)) {
+          localEq.push(seq);
+        }
+      });
+      deepScan.technicians.forEach(stech => {
+        if (!localTechs.some(ltech => ltech.id === stech.id)) {
+          localTechs.push(stech);
+        }
+      });
+
+      // 0. Auto-discover server-configured database credentials (for mobile devices)
+      await fetchAndApplyServerCredentials();
 
       // 1. If Supabase Cloud is configured, synchronize with Cloud PostgreSQL
       if (isSupabaseReady()) {
@@ -413,6 +501,10 @@ export default function App() {
               setTimeout(() => setSyncStatusMsg(null), 4000);
             }
             return;
+          } else if (cloudResult && !cloudResult.success && cloudResult.error === 'Tabelas não encontradas') {
+             // Let the user know tables are missing but don't stop the flow
+             console.warn('Cloud sync: tables missing in Supabase');
+             if (manualScan) setSyncStatusMsg('Conectado ao Supabase, mas as tabelas não foram encontradas. Vá em Configurações > Criar Tabelas.');
           }
         } catch (cloudErr) {
           console.warn('Supabase cloud sync notice:', cloudErr);
@@ -475,10 +567,10 @@ export default function App() {
     }
   };
 
-  // Synchronize on application mount
+  // Synchronize on application mount and after login
   useEffect(() => {
     syncWithServer(false);
-  }, []);
+  }, [isAuthenticated]);
 
 
   // Real-time Server-Sent Events (SSE) listener for push notifications and chime alerts
@@ -1487,9 +1579,17 @@ export default function App() {
               </h1>
               <p className="text-[10px] sm:text-xs text-slate-400 flex items-center gap-1.5 flex-wrap">
                 <span>Painel Admin</span>
-                <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono ${isSupabaseConfigured ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-slate-800 text-slate-300'}`}>
-                  <Database className="w-3 h-3" /> {isSupabaseConfigured ? 'Supabase' : 'Local'}
+                <span 
+                  className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono cursor-help transition-all ${isSupabaseReady() ? 'bg-emerald-950 text-emerald-400 border border-emerald-800 shadow-[0_0_8px_rgba(16,185,129,0.2)]' : 'bg-slate-800 text-slate-400 border border-slate-700'}`}
+                  title={isSupabaseReady() ? 'Conectado ao Supabase Cloud' : 'Armazenamento Local apenas'}
+                >
+                  <Database className="w-3 h-3" /> {isSupabaseReady() ? 'Supabase ONLINE' : 'Modo LOCAL'}
                 </span>
+                {!isServerSynced && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-950/80 text-amber-400 border border-amber-800 animate-pulse">
+                    <RefreshCw className="w-2.5 h-2.5 animate-spin" /> SINCRONIZANDO...
+                  </span>
+                )}
               </p>
             </div>
           </div>
@@ -1544,6 +1644,17 @@ export default function App() {
         </nav>
 
         <div className="flex items-center gap-1.5 sm:gap-2.5 flex-wrap w-full sm:w-auto justify-start sm:justify-end">
+          {/* Manual Force Sync Button */}
+          <button
+            onClick={() => syncWithServer(true)}
+            disabled={!isServerSynced}
+            className="px-2.5 py-1.5 bg-slate-900 border border-slate-700 text-slate-300 hover:text-white hover:border-emerald-500 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1.5 group"
+            title="Forçar sincronização com o banco de dados"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 group-hover:rotate-180 transition-transform duration-500 ${!isServerSynced ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">Sincronizar</span>
+          </button>
+
           {/* Audio Chime Notification Toggle */}
           <button
             onClick={toggleSound}
