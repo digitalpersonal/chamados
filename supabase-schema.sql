@@ -107,3 +107,13 @@ CREATE TABLE IF NOT EXISTS system_backups (
 ALTER TABLE system_backups ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Enable all access for admin on system_backups" ON system_backups FOR ALL USING (true) WITH CHECK (true);
 
+-- 7. Tabela de Sincronização em Tempo Real (Estado Geral Unificado)
+CREATE TABLE IF NOT EXISTS system_state (
+    id TEXT PRIMARY KEY,
+    payload JSONB NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+ALTER TABLE system_state ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Enable all access for admin on system_state" ON system_state FOR ALL USING (true) WITH CHECK (true);
+

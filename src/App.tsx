@@ -11,14 +11,22 @@ import {
   ShieldCheck, BarChart3, Users, HardDrive, Share2, Printer as PrinterIcon,
   CheckSquare, XCircle, AlertCircle, HelpCircle, RefreshCw, Send, Lock, Printer as Print, Database,
   Globe, Volume2, VolumeX, Bell, BellRing, Link2, ExternalLink, Copy, Check, LogOut,
-  FileSpreadsheet, Package, Tag, Cpu, Wifi, Network, Cable, X
+  FileSpreadsheet, Package, Tag, Cpu, Wifi, Network, Cable, X, Cloud
 } from 'lucide-react';
-import { supabase, isSupabaseConfigured } from './lib/supabase';
+import { supabase, isSupabaseConfigured, isSupabaseReady } from './lib/supabase';
+import { 
+  syncWithSupabase, 
+  saveTicketToSupabase, 
+  deleteTicketFromSupabase, 
+  saveDepartmentToSupabase, 
+  deleteDepartmentFromSupabase 
+} from './lib/cloudDbService';
 import confetti from 'canvas-confetti';
 import PortalServidor from './components/PortalServidor';
 import AdminLogin from './components/AdminLogin';
 import DashboardCharts from './components/DashboardCharts';
 import BackupModal from './components/BackupModal';
+import CloudSyncModal from './components/CloudSyncModal';
 import { checkAndRunDailyScheduledBackup } from './lib/backupService';
 import { initAudioContext, playTicketAlertSound, getSoundEnabled, setSoundEnabled } from './lib/audioNotifier';
 
@@ -71,6 +79,7 @@ export interface Ticket {
   resolutionNotes?: string;
   partsUsed?: string[];
   cost?: number;
+  deadline?: string; // Prazo de entrega
   notes: TicketNote[];
   requesterName?: string;
   requesterContact?: string;
@@ -218,32 +227,166 @@ export default function App() {
     localStorage.setItem('guaranesia_prod_departments', JSON.stringify(departments));
   }, [departments]);
 
-  // Synchronize departments with server on app load
-  useEffect(() => {
-    fetch('/api/departments')
-      .then(res => res.json())
-      .then(data => {
-        if (data.success && Array.isArray(data.departments) && data.departments.length > 0) {
-          setDepartments(sortDepartments(data.departments));
-          try {
-            localStorage.setItem('guaranesia_prod_departments', JSON.stringify(data.departments));
-          } catch (e) {}
+  const [isServerSynced, setIsServerSynced] = useState(false);
+  const [syncStatusMsg, setSyncStatusMsg] = useState<string | null>(null);
+  const [isCloudSyncModalOpen, setIsCloudSyncModalOpen] = useState(false);
+
+  // Full Server & Cloud (Supabase) Database Synchronization Function
+  const syncWithServer = async (manualScan = false) => {
+    try {
+      let localTickets: Ticket[] = [];
+      let localTechs: Technician[] = [];
+      let localEq: Equipment[] = [];
+      let localDepts: string[] = [];
+
+      try {
+        const t = localStorage.getItem('guaranesia_prod_tickets');
+        if (t) localTickets = JSON.parse(t);
+        const tc = localStorage.getItem('guaranesia_prod_technicians');
+        if (tc) localTechs = JSON.parse(tc);
+        const eq = localStorage.getItem('guaranesia_prod_equipment');
+        if (eq) localEq = JSON.parse(eq);
+        const d = localStorage.getItem('guaranesia_prod_departments');
+        if (d) localDepts = JSON.parse(d);
+      } catch (e) {
+        console.warn('Error reading local cache on startup:', e);
+      }
+
+      // If manual scan or empty tickets, search all localStorage keys for any stored tickets from earlier sessions
+      if (manualScan || localTickets.length === 0) {
+        try {
+          if (typeof window !== 'undefined' && window.localStorage) {
+            for (let i = 0; i < localStorage.length; i++) {
+              const key = localStorage.key(i);
+              if (key && (key.includes('ticket') || key.includes('backup') || key.includes('guaranesia'))) {
+                try {
+                  const val = localStorage.getItem(key);
+                  if (val && (val.includes('"code"') || val.includes('CH-2026') || val.includes('"department"'))) {
+                    const parsed = JSON.parse(val);
+                    if (Array.isArray(parsed)) {
+                      parsed.forEach(item => {
+                        if (item && item.id && item.code && !localTickets.some(lt => lt.id === item.id)) {
+                          localTickets.push(item);
+                        }
+                      });
+                    } else if (parsed && parsed.data && Array.isArray(parsed.data.tickets)) {
+                      parsed.data.tickets.forEach((item: any) => {
+                        if (item && item.id && !localTickets.some(lt => lt.id === item.id)) {
+                          localTickets.push(item);
+                        }
+                      });
+                    }
+                  }
+                } catch (e) {}
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('Storage scanner notice:', e);
         }
-      })
-      .catch(err => console.warn('Could not sync departments from server:', err));
+      }
+
+      // 1. If Supabase Cloud is configured, synchronize with Cloud PostgreSQL
+      if (isSupabaseReady()) {
+        try {
+          const cloudResult = await syncWithSupabase({
+            tickets: localTickets,
+            departments: localDepts,
+            equipment: localEq,
+            technicians: localTechs
+          });
+
+          if (cloudResult && cloudResult.success) {
+            setIsServerSynced(true);
+            if (Array.isArray(cloudResult.tickets)) {
+              setTickets(cloudResult.tickets);
+              try { localStorage.setItem('guaranesia_prod_tickets', JSON.stringify(cloudResult.tickets)); } catch (e) {}
+            }
+            if (Array.isArray(cloudResult.departments) && cloudResult.departments.length > 0) {
+              setDepartments(sortDepartments(cloudResult.departments));
+              try { localStorage.setItem('guaranesia_prod_departments', JSON.stringify(cloudResult.departments)); } catch (e) {}
+            }
+            if (Array.isArray(cloudResult.equipment)) {
+              setEquipment(cloudResult.equipment);
+              try { localStorage.setItem('guaranesia_prod_equipment', JSON.stringify(cloudResult.equipment)); } catch (e) {}
+            }
+            if (Array.isArray(cloudResult.technicians)) {
+              setTechnicians(cloudResult.technicians);
+              try { localStorage.setItem('guaranesia_prod_technicians', JSON.stringify(cloudResult.technicians)); } catch (e) {}
+            }
+
+            if (manualScan) {
+              setSyncStatusMsg(`Sincronização em Nuvem (Supabase) concluída! ${cloudResult.tickets?.length || 0} chamado(s) e ${cloudResult.departments?.length || 0} setor(es) ativos.`);
+              setTimeout(() => setSyncStatusMsg(null), 4000);
+            }
+            return;
+          }
+        } catch (cloudErr) {
+          console.warn('Supabase cloud sync notice:', cloudErr);
+        }
+      }
+
+      // 2. Call the server sync API to merge client and server data into data/*.json
+      try {
+        const res = await fetch('/api/system/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tickets: localTickets,
+            technicians: localTechs,
+            equipment: localEq,
+            departments: localDepts
+          })
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success) {
+            setIsServerSynced(true);
+            if (Array.isArray(data.tickets)) {
+              setTickets(data.tickets);
+              try {
+                localStorage.setItem('guaranesia_prod_tickets', JSON.stringify(data.tickets));
+              } catch (e) {}
+            }
+            if (Array.isArray(data.technicians)) {
+              setTechnicians(data.technicians);
+              try {
+                localStorage.setItem('guaranesia_prod_technicians', JSON.stringify(data.technicians));
+              } catch (e) {}
+            }
+            if (Array.isArray(data.equipment)) {
+              setEquipment(data.equipment);
+              try {
+                localStorage.setItem('guaranesia_prod_equipment', JSON.stringify(data.equipment));
+              } catch (e) {}
+            }
+            if (Array.isArray(data.departments) && data.departments.length > 0) {
+              setDepartments(sortDepartments(data.departments));
+              try {
+                localStorage.setItem('guaranesia_prod_departments', JSON.stringify(data.departments));
+              } catch (e) {}
+            }
+
+            if (manualScan) {
+              setSyncStatusMsg(`Banco de dados sincronizado com sucesso! ${data.tickets.length} chamado(s) e ${data.departments.length} setor(es) ativos.`);
+              setTimeout(() => setSyncStatusMsg(null), 4000);
+            }
+          }
+        }
+      } catch (err: any) {
+        console.warn('Server storage sync notice (expected on static Vercel):', err);
+      }
+    } catch (err: any) {
+      console.warn('Could not sync with storage:', err);
+    }
+  };
+
+  // Synchronize on application mount
+  useEffect(() => {
+    syncWithServer(false);
   }, []);
 
-  // Routine Daily Backup execution (runs daily automatically on system launch)
-  useEffect(() => {
-    if (tickets.length > 0 || equipment.length > 0) {
-      checkAndRunDailyScheduledBackup({
-        tickets,
-        equipment,
-        technicians,
-        departments
-      }).catch(err => console.warn('Daily backup routine notice:', err));
-    }
-  }, [tickets.length, equipment.length, technicians.length, departments.length]);
 
   // Real-time Server-Sent Events (SSE) listener for push notifications and chime alerts
   useEffect(() => {
@@ -364,6 +507,7 @@ export default function App() {
   const [newDept, setNewDept] = useState(departments[0] || '');
   const [newPriority, setNewPriority] = useState<Priority>('Média');
   const [newDesc, setNewDesc] = useState('');
+  const [newDeadline, setNewDeadline] = useState(''); // Novo estado
   const [newTechId, setNewTechId] = useState('');
   const [newEqId, setNewEqId] = useState('');
   const [isAiAnalyzing, setIsAiAnalyzing] = useState(false);
@@ -449,26 +593,31 @@ export default function App() {
       technicianId: newTechId || undefined,
       createdAt: now,
       updatedAt: now,
+      deadline: newDeadline || undefined,
       notes: [
         { id: `n-${Date.now()}`, author: 'Administrador (Prefeitura)', text: 'Chamado cadastrado no sistema.', timestamp: now }
       ],
       aiDiagnosis
     };
 
-    setTickets([newTicketObj, ...tickets]);
+    const updatedTickets = [newTicketObj, ...tickets];
+    setTickets(updatedTickets);
     setNewTitle('');
     setNewDesc('');
     setIsNewTicketOpen(false);
 
-    // Broadcast event across clients
-    fetch('/api/tickets/broadcast', {
+    // Persist directly to Supabase Cloud Database (if connected)
+    saveTicketToSupabase(newTicketObj, updatedTickets);
+
+    // Save directly to server disk and broadcast event across all clients
+    fetch('/api/tickets', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ticket: newTicketObj, eventType: 'NEW_TICKET' })
-    }).catch(() => {});
+      body: JSON.stringify(newTicketObj)
+    }).catch(err => console.warn('Error saving ticket to server:', err));
   };
 
-  const handleAddTechnician = (e: React.FormEvent) => {
+  const handleAddTechnician = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!techName.trim()) return;
 
@@ -482,16 +631,37 @@ export default function App() {
       specialty: techSpecialty
     };
 
-    setTechnicians([...technicians, newTech]);
+    const updated = [...technicians, newTech];
+    setTechnicians(updated);
     setTechName('');
     setTechCompany('');
     setTechPhone('');
     setTechEmail('');
     setTechSpecialty('');
     setIsNewTechOpen(false);
+
+    // Persist to server disk
+    try {
+      await fetch('/api/technicians', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newTech)
+      });
+    } catch (err) {
+      console.warn('Error saving technician to server:', err);
+    }
   };
 
-  const handleAddEquipment = (e: React.FormEvent) => {
+  const handleDeleteTechnician = async (techId: string) => {
+    setTechnicians(prev => prev.filter(t => t.id !== techId));
+    try {
+      await fetch(`/api/technicians/${techId}`, { method: 'DELETE' });
+    } catch (err) {
+      console.warn('Error deleting technician from server:', err);
+    }
+  };
+
+  const handleAddEquipment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!eqName.trim()) return;
 
@@ -506,12 +676,33 @@ export default function App() {
       status: 'Operacional'
     };
 
-    setEquipment([...equipment, newEq]);
+    const updated = [...equipment, newEq];
+    setEquipment(updated);
     setEqName('');
     setEqModel('');
     setEqSerial('');
     setEqIp('');
     setIsNewEqOpen(false);
+
+    // Persist to server disk
+    try {
+      await fetch('/api/equipment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newEq)
+      });
+    } catch (err) {
+      console.warn('Error saving equipment to server:', err);
+    }
+  };
+
+  const handleDeleteEquipment = async (eqId: string) => {
+    setEquipment(prev => prev.filter(e => e.id !== eqId));
+    try {
+      await fetch(`/api/equipment/${eqId}`, { method: 'DELETE' });
+    } catch (err) {
+      console.warn('Error deleting equipment from server:', err);
+    }
   };
 
   const handleAddDepartment = async (e: React.FormEvent) => {
@@ -529,6 +720,9 @@ export default function App() {
     } catch (err) {}
     setDeptName('');
     setIsNewDeptOpen(false);
+
+    // Save directly to Supabase Cloud Database (if connected)
+    saveDepartmentToSupabase(cleanName, updated);
 
     // Persist to server API
     try {
@@ -582,6 +776,9 @@ export default function App() {
       localStorage.setItem('guaranesia_prod_departments', JSON.stringify(updated));
     } catch (err) {}
 
+    // Delete from Supabase Cloud Database (if connected)
+    deleteDepartmentFromSupabase(dept, updated);
+
     try {
       await fetch('/api/departments', {
         method: 'DELETE',
@@ -628,6 +825,15 @@ export default function App() {
     }, 6000);
   };
 
+  const persistTicketUpdate = (ticket: Ticket) => {
+    saveTicketToSupabase(ticket, tickets);
+    fetch(`/api/tickets/${ticket.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(ticket)
+    }).catch(err => console.warn('Error updating ticket on server disk:', err));
+  };
+
   const updateTicketStatus = (ticketId: string, newStatus: TicketStatus) => {
     let ticketCode = '';
     const currentTicket = tickets.find(t => t.id === ticketId);
@@ -656,6 +862,7 @@ export default function App() {
         if (selectedTicket && selectedTicket.id === ticketId) {
           setSelectedTicket(updated);
         }
+        persistTicketUpdate(updated);
         return updated;
       }
       return t;
@@ -681,6 +888,9 @@ export default function App() {
     setTicketToDelete(null);
     setDeleteToast(`Chamado [${ticketCode}] apagado com sucesso.`);
     setTimeout(() => setDeleteToast(null), 4000);
+
+    deleteTicketFromSupabase(ticketId);
+    fetch(`/api/tickets/${ticketId}`, { method: 'DELETE' }).catch(err => console.warn(err));
   };
 
   const handleSaveEditedTicket = (e: React.FormEvent) => {
@@ -714,6 +924,7 @@ export default function App() {
     if (selectedTicket && selectedTicket.id === updatedTicket.id) {
       setSelectedTicket(updatedTicket);
     }
+    persistTicketUpdate(updatedTicket);
     setEditingTicket(null);
 
     if (wasNotCompleted && isNowCompleted) {
@@ -742,6 +953,7 @@ export default function App() {
         if (selectedTicket && selectedTicket.id === ticketId) {
           setSelectedTicket(updated);
         }
+        persistTicketUpdate(updated);
         return updated;
       }
       return t;
@@ -768,6 +980,7 @@ export default function App() {
         if (selectedTicket && selectedTicket.id === ticketId) {
           setSelectedTicket(updated);
         }
+        persistTicketUpdate(updated);
         return updated;
       }
       return t;
@@ -816,6 +1029,7 @@ export default function App() {
         if (selectedTicket && selectedTicket.id === ticketId) {
           setSelectedTicket(updated);
         }
+        persistTicketUpdate(updated);
         return updated;
       }
       return t;
@@ -860,6 +1074,15 @@ export default function App() {
     if (isNaN(createdAtMs)) return false;
     const diffHours = (Date.now() - createdAtMs) / (1000 * 60 * 60);
     return diffHours >= 48;
+  };
+
+  const isNearDeadline = (ticket: Ticket): boolean => {
+    if (!ticket.deadline || ticket.status === 'Resolvido' || ticket.status === 'Fechado' || ticket.status === 'Cancelado') return false;
+    const deadlineMs = new Date(ticket.deadline).getTime();
+    if (isNaN(deadlineMs)) return false;
+    const now = Date.now();
+    const daysUntil = (deadlineMs - now) / (1000 * 60 * 60 * 24);
+    return daysUntil <= 2; // Warning if within 2 days
   };
 
   const getHoursOpen = (createdAt: string): number => {
@@ -1299,6 +1522,20 @@ export default function App() {
             <span className="hidden sm:inline">Relatório</span>
           </button>
 
+          {/* Cloud Sync & Supabase Modal Button */}
+          <button
+            onClick={() => setIsCloudSyncModalOpen(true)}
+            className={`px-2 sm:px-2.5 py-1.5 text-[11px] sm:text-xs font-semibold rounded-lg border flex items-center gap-1.5 transition-colors ${
+              isSupabaseReady() 
+                ? 'bg-emerald-950/60 text-emerald-300 border-emerald-500/40 hover:bg-emerald-900/60'
+                : 'bg-amber-950/60 text-amber-300 border-amber-500/40 hover:bg-amber-900/60'
+            }`}
+            title="Conexão com Banco de Dados em Nuvem (Supabase & Vercel)"
+          >
+            <Cloud className="w-3.5 h-3.5 shrink-0" />
+            <span className="hidden sm:inline">{isSupabaseReady() ? 'Nuvem Conectada' : 'Conectar Nuvem'}</span>
+          </button>
+
           {/* Daily Backup & Supabase Sync Button */}
           <button
             onClick={() => setIsBackupModalOpen(true)}
@@ -1356,7 +1593,7 @@ export default function App() {
                 <span className="text-[11px] sm:text-xs font-semibold tracking-wider text-emerald-400 uppercase">Prefeitura Municipal de Guaranésia • MG (Produção)</span>
                 <h2 className="text-xl sm:text-2xl font-bold text-white mt-1">Central de Manutenção e Suporte Técnico</h2>
                 <p className="text-xs sm:text-sm text-slate-300 mt-1 max-w-2xl">
-                  Sistema em ambiente de produção para controle de impressoras, toners, relógios de ponto, telefones IP e computadores.
+                  Sistema com gravação permanente em disco no servidor para controle de chamados, impressoras, toners, relógios de ponto, telefones IP e computadores.
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2.5 shrink-0 w-full md:w-auto">
@@ -1376,6 +1613,69 @@ export default function App() {
                 </button>
               </div>
             </div>
+
+            {/* Sync status message toast if active */}
+            {syncStatusMsg && (
+              <div className="bg-emerald-500/20 border border-emerald-500 rounded-xl p-3 text-xs text-emerald-300 font-medium flex items-center justify-between gap-2">
+                <span>{syncStatusMsg}</span>
+                <button onClick={() => setSyncStatusMsg(null)} className="text-emerald-400 hover:text-white text-xs">✕</button>
+              </div>
+            )}
+
+            {/* Production Mode Status & Empty State */}
+            {tickets.length === 0 ? (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-xl text-center space-y-4">
+                <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span>Modo Produção Oficial Ativo • Banco de Dados Permanente Conectado</span>
+                </div>
+
+                <div className="max-w-md mx-auto">
+                  <h3 className="text-base sm:text-lg font-bold text-white">Nenhum chamado aberto na fila</h3>
+                  <p className="text-xs sm:text-sm text-slate-400 mt-1">
+                    O sistema está operando em Modo de Produção Oficial com gravação contínua no servidor. Todos os chamados cadastrados pelos técnicos ou servidores municipais são gravados diretamente e com segurança no banco de dados permanente.
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsNewTicketOpen(true)}
+                    className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-xl text-xs sm:text-sm flex items-center gap-2 transition-all shadow-lg hover:shadow-emerald-500/20"
+                  >
+                    <Plus className="w-4 h-4 shrink-0" />
+                    <span>Abrir Novo Chamado</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => syncWithServer(true)}
+                    className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-1.5 transition-colors border border-slate-700"
+                    title="Sincronizar banco de dados no servidor"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Sincronizar Banco</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between text-xs px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-400 flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span className="text-slate-300 font-medium">Modo Produção Oficial:</span>
+                  <span className="font-mono text-emerald-400 font-bold">{tickets.length} chamado(s) salvo(s) no banco de dados</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => syncWithServer(true)}
+                  className="text-xs text-slate-400 hover:text-white flex items-center gap-1 hover:underline"
+                  title="Sincronizar dados com o banco do servidor"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Sincronizar Banco</span>
+                </button>
+              </div>
+            )}
 
             {/* KPI Cards */}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-4 min-w-0 max-w-full">
@@ -2002,9 +2302,19 @@ export default function App() {
                         <span className="text-[11px] sm:text-xs text-emerald-400 font-mono">{eq.type}</span>
                       </div>
                     </div>
-                    <span className={`px-2 py-0.5 text-[11px] font-semibold rounded shrink-0 ${eq.status === 'Operacional' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-amber-950 text-amber-400 border border-amber-800'}`}>
-                      {eq.status}
-                    </span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span className={`px-2 py-0.5 text-[11px] font-semibold rounded shrink-0 ${eq.status === 'Operacional' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-amber-950 text-amber-400 border border-amber-800'}`}>
+                        {eq.status}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteEquipment(eq.id)}
+                        className="text-slate-500 hover:text-rose-400 p-1 rounded hover:bg-slate-900 transition-colors"
+                        title="Remover equipamento do inventário"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
 
                   <div className="text-xs space-y-1.5 pt-2 border-t border-slate-900 text-slate-300">
@@ -2131,9 +2441,19 @@ export default function App() {
                         <h3 className="font-bold text-white text-sm sm:text-base truncate">{tc.name}</h3>
                         <div className="text-[11px] sm:text-xs text-slate-400 mt-0.5 truncate">{tc.specialty}</div>
                       </div>
-                      <span className={`px-2 py-0.5 text-[10px] sm:text-xs font-semibold rounded-md shrink-0 ${tc.type === 'Interno' ? 'bg-blue-950 text-blue-300 border border-blue-800' : 'bg-purple-950 text-purple-300 border border-purple-800'}`}>
-                        {tc.type} {tc.company ? `• ${tc.company}` : ''}
-                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className={`px-2 py-0.5 text-[10px] sm:text-xs font-semibold rounded-md shrink-0 ${tc.type === 'Interno' ? 'bg-blue-950 text-blue-300 border border-blue-800' : 'bg-purple-950 text-purple-300 border border-purple-800'}`}>
+                          {tc.type} {tc.company ? `• ${tc.company}` : ''}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteTechnician(tc.id)}
+                          className="text-slate-500 hover:text-rose-400 p-1 rounded hover:bg-slate-900 transition-colors"
+                          title="Remover técnico/empresa"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
 
                     <div className="space-y-2 text-xs text-slate-300 pt-2 border-t border-slate-900">
@@ -3086,6 +3406,16 @@ export default function App() {
                 />
               </div>
 
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1">Prazo de Entrega Estimado</label>
+                <input 
+                  type="date"
+                  value={newDeadline}
+                  onChange={(e) => setNewDeadline(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
               <div className="flex justify-end gap-2.5 pt-4 border-t border-slate-900 flex-wrap">
                 <button 
                   type="button"
@@ -3590,6 +3920,36 @@ export default function App() {
           equipment,
           technicians,
           departments
+        }}
+      />
+
+      {/* Cloud & Supabase Sync Modal */}
+      <CloudSyncModal
+        isOpen={isCloudSyncModalOpen}
+        onClose={() => setIsCloudSyncModalOpen(false)}
+        tickets={tickets}
+        departments={departments}
+        equipment={equipment}
+        technicians={technicians}
+        onDataLoaded={(data) => {
+          if (data.tickets) {
+            setTickets(data.tickets);
+            try { localStorage.setItem('guaranesia_prod_tickets', JSON.stringify(data.tickets)); } catch (e) {}
+          }
+          if (data.departments) {
+            setDepartments(sortDepartments(data.departments));
+            try { localStorage.setItem('guaranesia_prod_departments', JSON.stringify(data.departments)); } catch (e) {}
+          }
+          if (data.equipment) {
+            setEquipment(data.equipment);
+            try { localStorage.setItem('guaranesia_prod_equipment', JSON.stringify(data.equipment)); } catch (e) {}
+          }
+          if (data.technicians) {
+            setTechnicians(data.technicians);
+            try { localStorage.setItem('guaranesia_prod_technicians', JSON.stringify(data.technicians)); } catch (e) {}
+          }
+          setSyncStatusMsg('Dados sincronizados com sucesso!');
+          setTimeout(() => setSyncStatusMsg(null), 4000);
         }}
       />
 

@@ -10,6 +10,7 @@ import {
   HelpCircle, Building2, User, PhoneCall, AlertCircle, Copy, Check
 } from 'lucide-react';
 import { EquipmentType, Priority, Ticket, TicketStatus } from '../App';
+import { saveTicketToSupabase } from '../lib/cloudDbService';
 
 interface PortalServidorProps {
   departments: string[];
@@ -134,27 +135,64 @@ export default function PortalServidor({
 
     setIsSubmitting(true);
     try {
-      const response = await fetch('/api/tickets/public', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title,
-          description,
-          equipmentType,
-          department,
-          requesterName,
-          requesterContact,
-          priority
-        })
-      });
+      let createdTicket: Ticket | null = null;
 
-      const data = await response.json();
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Erro ao enviar chamado');
+      try {
+        const response = await fetch('/api/tickets/public', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title,
+            description,
+            equipmentType,
+            department,
+            requesterName,
+            requesterContact,
+            priority
+          })
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.success && data.ticket) {
+            createdTicket = data.ticket;
+          }
+        }
+      } catch (err) {
+        console.warn('Backend API endpoint unreachable (expected on static Vercel host), falling back to cloud database:', err);
       }
 
-      setSuccessTicket(data.ticket);
-      onTicketCreated(data.ticket);
+      // If backend API is not running (e.g. static Vite hosting on Vercel), construct ticket directly
+      if (!createdTicket) {
+        const now = new Date().toISOString();
+        const code = `CH-2026-${String(tickets.length + 1).padStart(3, '0')}`;
+        createdTicket = {
+          id: `t-pub-${Date.now()}`,
+          code,
+          equipmentType,
+          department,
+          title,
+          description,
+          status: 'Aberto',
+          priority,
+          createdAt: now,
+          updatedAt: now,
+          notes: [
+            {
+              id: `n-${Date.now()}`,
+              author: requesterName.trim() + (requesterContact ? ` (${requesterContact.trim()})` : ''),
+              text: `Abertura de chamado pelo Portal do Servidor. Contato: ${requesterContact.trim() || 'Não informado'}`,
+              timestamp: now
+            }
+          ]
+        };
+      }
+
+      // Persist directly to Supabase Cloud Database
+      saveTicketToSupabase(createdTicket, [createdTicket, ...tickets]);
+
+      setSuccessTicket(createdTicket);
+      onTicketCreated(createdTicket);
 
       // Save requester info to localStorage for instant auto-fill on next visits (Guarafood style)
       if (requesterName.trim() && requesterContact.trim()) {
