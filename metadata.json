@@ -1,0 +1,6 @@
+{
+  "name": "Prefeitura de Guaranésia - Controle de Chamados",
+  "description": "Sistema exclusivo para controle de chamados de manutenção (impressoras, relógios de ponto, telefones IP, computadores, toners) na Prefeitura Municipal de Guaranésia, com gestão de técnicos e assistente de IA.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
