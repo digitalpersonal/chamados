@@ -19,6 +19,7 @@ interface PortalServidorProps {
   onTicketCreated: (ticket: Ticket) => void;
   isAdminPreview?: boolean;
   onSwitchToAdmin?: () => void;
+  onSwitchToTechnician?: () => void;
 }
 
 export default function PortalServidor({
@@ -26,7 +27,8 @@ export default function PortalServidor({
   tickets,
   onTicketCreated,
   isAdminPreview,
-  onSwitchToAdmin
+  onSwitchToAdmin,
+  onSwitchToTechnician
 }: PortalServidorProps) {
   // Guarafood style: automatically load from localStorage if previously saved on this device
   const [requesterName, setRequesterName] = useState(() => {
@@ -305,9 +307,23 @@ export default function PortalServidor({
             </div>
           </div>
 
-          <div className="flex items-center gap-2 text-xs text-slate-400 bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800 shrink-0">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span className="font-medium text-slate-300 text-[11px] sm:text-xs">Central de Chamados TI</span>
+          <div className="flex items-center gap-2">
+            {onSwitchToTechnician && (
+              <button
+                type="button"
+                onClick={onSwitchToTechnician}
+                className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 border border-emerald-500/40 text-emerald-300 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                title="Acesso dos Técnicos de TI / Bancada de Chamados"
+              >
+                <Wrench className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="hidden sm:inline">Área do Técnico</span>
+              </button>
+            )}
+
+            <div className="flex items-center gap-2 text-xs text-slate-400 bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800 shrink-0">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span className="font-medium text-slate-300 text-[11px] sm:text-xs">Central de Chamados TI</span>
+            </div>
           </div>
         </div>
       </header>

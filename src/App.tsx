@@ -27,6 +27,7 @@ import AdminLogin from './components/AdminLogin';
 import DashboardCharts from './components/DashboardCharts';
 import BackupModal from './components/BackupModal';
 import CloudSyncModal from './components/CloudSyncModal';
+import TechnicianPortal from './components/TechnicianPortal';
 import { checkAndRunDailyScheduledBackup } from './lib/backupService';
 import { initAudioContext, playTicketAlertSound, getSoundEnabled, setSoundEnabled } from './lib/audioNotifier';
 
@@ -43,6 +44,8 @@ export interface Technician {
   phone: string;
   email: string;
   specialty: string;
+  username?: string;
+  password?: string;
 }
 
 export interface Equipment {
@@ -89,6 +92,7 @@ export interface Ticket {
     pecasSugeridas: string[];
     tempoEstimado: string;
   };
+  archived?: boolean;
 }
 
 export const sortDepartments = (list: string[]): string[] =>
@@ -106,6 +110,39 @@ export const DEFAULT_DEPARTMENTS = sortDepartments([
   'Secretaria de Obras e Serviços',
   'Secretaria de Saúde'
 ]);
+
+export const DEFAULT_TECHNICIANS: Technician[] = [
+  {
+    id: 'tech-1',
+    name: 'Carlos Roberto (TI Interno)',
+    type: 'Interno',
+    phone: '(35) 99876-1234',
+    email: 'carlos.ti@guaranesia.mg.gov.br',
+    specialty: 'Redes, Telefonia IP e Relógio de Ponto',
+    username: 'carlos',
+    password: '123456'
+  },
+  {
+    id: 'tech-2',
+    name: 'Marcos Vinícius (TI Interno)',
+    type: 'Interno',
+    phone: '(35) 99123-5678',
+    email: 'marcos.ti@guaranesia.mg.gov.br',
+    specialty: 'Impressoras, Manutenção e Troca de Toner',
+    username: 'marcos',
+    password: '123456'
+  },
+  {
+    id: 'tech-3',
+    name: 'Ana Paula (Suporte de TI)',
+    type: 'Interno',
+    phone: '(35) 98845-6789',
+    email: 'suporte@guaranesia.mg.gov.br',
+    specialty: 'Sistemas, Atualização do Site e Suporte Geral',
+    username: 'ana',
+    password: '123456'
+  }
+];
 
 export const calculateDefaultDeadline = (priority: Priority, fromDate: Date = new Date()): string => {
   const date = new Date(fromDate);
@@ -298,12 +335,15 @@ export function scanAndRecoverAllLocalStorage(): {
 export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'tickets' | 'equipment' | 'technicians' | 'departments'>('dashboard');
   
-  // View mode: 'admin' (restricted control) or 'portal' (public submission for civil servants)
-  const [viewMode, setViewMode] = useState<'admin' | 'portal'>(() => {
+  // View mode: 'admin' (restricted control), 'portal' (public submission), or 'technician' (individual tech workbench)
+  const [viewMode, setViewMode] = useState<'admin' | 'portal' | 'technician'>(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       if (params.get('portal') === 'servidor' || params.get('abrir') === '1') {
         return 'portal';
+      }
+      if (params.get('portal') === 'tecnico' || params.get('tecnico') === '1' || params.get('area') === 'tecnico') {
+        return 'technician';
       }
     }
     return 'admin';
@@ -386,7 +426,13 @@ export default function App() {
 
   const [technicians, setTechnicians] = useState<Technician[]>(() => {
     const saved = localStorage.getItem('guaranesia_prod_technicians');
-    return saved ? JSON.parse(saved) : [];
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch (e) {}
+    }
+    return DEFAULT_TECHNICIANS;
   });
 
   const [equipment, setEquipment] = useState<Equipment[]>(() => {
@@ -567,9 +613,25 @@ export default function App() {
     }
   };
 
-  // Synchronize on application mount and after login
+  // Synchronize on application mount, after login, and periodically
   useEffect(() => {
     syncWithServer(false);
+
+    // Setup auto-polling every 60 seconds
+    const interval = setInterval(() => {
+      syncWithServer(false);
+    }, 60000);
+
+    // Also sync when window regains focus (user switches back to tab)
+    const handleFocus = () => {
+      syncWithServer(false);
+    };
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+    };
   }, [isAuthenticated]);
 
 
@@ -704,6 +766,9 @@ export default function App() {
   const [techPhone, setTechPhone] = useState('');
   const [techEmail, setTechEmail] = useState('');
   const [techSpecialty, setTechSpecialty] = useState('');
+  const [techUsername, setTechUsername] = useState('');
+  const [techPassword, setTechPassword] = useState('');
+  const [editingTechnician, setEditingTechnician] = useState<Technician | null>(null);
 
   // New Equipment Form state
   const [eqName, setEqName] = useState('');
@@ -808,12 +873,14 @@ export default function App() {
 
     const newTech: Technician = {
       id: `tech-${Date.now()}`,
-      name: techName,
+      name: techName.trim(),
       type: techType,
-      company: techType === 'Terceirizado' ? techCompany : undefined,
-      phone: techPhone,
-      email: techEmail,
-      specialty: techSpecialty
+      company: techType === 'Terceirizado' ? techCompany.trim() : undefined,
+      phone: techPhone.trim(),
+      email: techEmail.trim(),
+      specialty: techSpecialty.trim(),
+      username: techUsername.trim() || undefined,
+      password: techPassword.trim() || undefined
     };
 
     const updated = [...technicians, newTech];
@@ -823,7 +890,13 @@ export default function App() {
     setTechPhone('');
     setTechEmail('');
     setTechSpecialty('');
+    setTechUsername('');
+    setTechPassword('');
     setIsNewTechOpen(false);
+
+    try {
+      localStorage.setItem('guaranesia_prod_technicians', JSON.stringify(updated));
+    } catch (e) {}
 
     // Persist to server disk
     try {
@@ -837,8 +910,34 @@ export default function App() {
     }
   };
 
+  const handleSaveEditedTechnician = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTechnician || !editingTechnician.name.trim()) return;
+
+    const updatedTechs = technicians.map(t => t.id === editingTechnician.id ? editingTechnician : t);
+    setTechnicians(updatedTechs);
+    setEditingTechnician(null);
+
+    try {
+      localStorage.setItem('guaranesia_prod_technicians', JSON.stringify(updatedTechs));
+    } catch (e) {}
+
+    try {
+      await fetch(`/api/technicians/${editingTechnician.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editingTechnician)
+      });
+    } catch (err) {
+      console.warn('Error updating technician on server:', err);
+    }
+  };
+
   const handleDeleteTechnician = async (techId: string) => {
     setTechnicians(prev => prev.filter(t => t.id !== techId));
+    try {
+      localStorage.setItem('guaranesia_prod_technicians', JSON.stringify(technicians.filter(t => t.id !== techId)));
+    } catch (e) {}
     try {
       await fetch(`/api/technicians/${techId}`, { method: 'DELETE' });
     } catch (err) {
@@ -1117,6 +1216,33 @@ export default function App() {
     }
   };
 
+  const toggleArchiveTicket = (ticketId: string) => {
+    setTickets(prev => prev.map(t => {
+      if (t.id === ticketId) {
+        const updated = {
+          ...t,
+          archived: !t.archived,
+          updatedAt: new Date().toISOString(),
+          notes: [
+            ...t.notes,
+            {
+              id: `n-${Date.now()}`,
+              author: 'Administrador (Prefeitura)',
+              text: t.archived ? 'Chamado desarquivado.' : 'Chamado arquivado (oculto da tela inicial e gerenciamento).',
+              timestamp: new Date().toISOString()
+            }
+          ]
+        };
+        if (selectedTicket && selectedTicket.id === ticketId) {
+          setSelectedTicket(updated);
+        }
+        persistTicketUpdate(updated);
+        return updated;
+      }
+      return t;
+    }));
+  };
+
   const assignTechnician = (ticketId: string, techId: string) => {
     const tech = technicians.find(tc => tc.id === techId);
     setTickets(tickets.map(t => {
@@ -1277,17 +1403,25 @@ export default function App() {
     return Math.floor(diffMs / (1000 * 60 * 60));
   };
 
-  // Stats calculation
-  const totalTickets = tickets.length;
-  const openTickets = tickets.filter(t => t.status === 'Aberto' || t.status === 'Em Andamento' || t.status === 'Aguardando Peças').length;
-  const resolvedTickets = tickets.filter(t => t.status === 'Resolvido' || t.status === 'Fechado').length;
-  const criticalTickets = tickets.filter(t => t.priority === 'Crítica' && t.status !== 'Resolvido' && t.status !== 'Fechado').length;
-  const overdueTickets48h = tickets.filter(isOverdue48h).length;
+  // Stats calculation (ignore archived for main stats)
+  const activeTickets = tickets.filter(t => !t.archived);
+  const totalTickets = activeTickets.length;
+  const openTickets = activeTickets.filter(t => t.status === 'Aberto' || t.status === 'Em Andamento' || t.status === 'Aguardando Peças').length;
+  const resolvedTickets = activeTickets.filter(t => t.status === 'Resolvido' || t.status === 'Fechado').length;
+  const criticalTickets = activeTickets.filter(t => t.priority === 'Crítica' && t.status !== 'Resolvido' && t.status !== 'Fechado').length;
+  const overdueTickets48h = activeTickets.filter(isOverdue48h).length;
 
   // Filtered tickets
   const filteredTickets = tickets.filter(t => {
+    // Manage archived visibility
+    if (statusFilter === 'Arquivado') {
+      if (!t.archived) return false;
+    } else {
+      if (t.archived) return false;
+    }
+
     const matchesStatus = 
-      statusFilter === 'todos' ? true :
+      statusFilter === 'todos' || statusFilter === 'Arquivado' ? true :
       statusFilter === 'pendente_48h' ? isOverdue48h(t) :
       t.status === statusFilter;
     const matchesType = typeFilter === 'todos' || t.equipmentType === typeFilter;
@@ -1427,6 +1561,37 @@ export default function App() {
     }
   };
 
+  // Dedicated Technician Workbench / Control View (No Admin password required)
+  if (viewMode === 'technician') {
+    return (
+      <TechnicianPortal
+        technicians={technicians}
+        tickets={tickets}
+        onUpdateTicket={(updated) => {
+          setTickets(prev => prev.map(t => t.id === updated.id ? updated : t));
+          if (selectedTicket && selectedTicket.id === updated.id) {
+            setSelectedTicket(updated);
+          }
+          persistTicketUpdate(updated);
+        }}
+        onAddTechnician={(newTech) => {
+          setTechnicians(prev => [...prev, newTech]);
+          try {
+            fetch('/api/technicians', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(newTech)
+            }).catch(e => console.warn(e));
+          } catch (e) {}
+        }}
+        onSwitchToAdmin={() => setViewMode('admin')}
+        onSwitchToPortalServidor={() => setViewMode('portal')}
+        onForceSync={() => syncWithServer(true)}
+        isSyncing={!isServerSynced}
+      />
+    );
+  }
+
   // If user accesses the Public Portal directly
   if (viewMode === 'portal') {
     return (
@@ -1441,6 +1606,7 @@ export default function App() {
           setIsAdminPreview(false);
           setViewMode('admin');
         }}
+        onSwitchToTechnician={() => setViewMode('technician')}
       />
     );
   }
@@ -1450,6 +1616,8 @@ export default function App() {
     return (
       <AdminLogin
         onLoginSuccess={() => setIsAuthenticated(true)}
+        onGoToTechnician={() => setViewMode('technician')}
+        onGoToPublicPortal={() => setViewMode('portal')}
       />
     );
   }
@@ -1594,8 +1762,16 @@ export default function App() {
             </div>
           </div>
 
-          {/* Quick Logout for Mobile in top row */}
+          {/* Quick Actions for Mobile in top row */}
           <div className="sm:hidden flex items-center gap-1 shrink-0">
+            <button
+              onClick={() => setViewMode('technician')}
+              className="px-2 py-1 bg-emerald-950/80 border border-emerald-500/50 text-emerald-300 rounded-lg text-[11px] font-bold flex items-center gap-1"
+              title="Ir para Área do Técnico"
+            >
+              <Wrench className="w-3 h-3 text-emerald-400" />
+              <span>Técnico</span>
+            </button>
             <button
               onClick={() => {
                 localStorage.removeItem('guaranesia_admin_auth');
@@ -1640,6 +1816,14 @@ export default function App() {
             className={`transition-colors whitespace-nowrap py-1 ${activeTab === 'technicians' ? 'text-emerald-400 font-semibold border-b-2 border-emerald-500' : 'hover:text-white'}`}
           >
             Técnicos ({technicians.length})
+          </button>
+          <button 
+            onClick={() => setViewMode('technician')} 
+            className="transition-colors whitespace-nowrap py-1 text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1.5 bg-emerald-950/60 px-2.5 rounded-lg border border-emerald-800/60"
+            title="Abrir tela de controle do técnico"
+          >
+            <Wrench className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Área do Técnico</span>
           </button>
         </nav>
 
@@ -1702,6 +1886,16 @@ export default function App() {
           >
             <Link2 className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
             <span className="hidden sm:inline">Link Servidores</span>
+          </button>
+
+          {/* Switch to technician view */}
+          <button
+            onClick={() => setViewMode('technician')}
+            className="px-2 sm:px-2.5 py-1.5 text-[11px] sm:text-xs font-semibold text-emerald-300 bg-emerald-950/60 border border-emerald-500/40 rounded-lg hover:bg-emerald-900/60 transition-colors flex items-center gap-1.5 shadow-sm cursor-pointer"
+            title="Acessar Bancada de Controle de Chamados do Técnico"
+          >
+            <Wrench className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <span className="hidden sm:inline">Área do Técnico</span>
           </button>
 
           {/* Switch to public view for testing */}
@@ -1980,7 +2174,7 @@ export default function App() {
             </div>
 
             {/* Recharts Analytics Section: Monthly Resolutions & Sector Distribution */}
-            <DashboardCharts tickets={tickets} departments={departments} />
+            <DashboardCharts tickets={activeTickets} departments={departments} />
 
             {/* Overdue 48h Warning Alert Banner if any open tickets > 48h */}
             {overdueTickets48h > 0 && (
@@ -2202,6 +2396,7 @@ export default function App() {
                   <option value="Resolvido">Resolvido</option>
                   <option value="Fechado">Fechado</option>
                   <option value="Cancelado">Cancelado</option>
+                  <option value="Arquivado">📁 Arquivados ({tickets.filter(t => t.archived).length})</option>
                 </select>
 
                 <select 
@@ -2353,10 +2548,23 @@ export default function App() {
                         </button>
                         <button 
                           onClick={() => handleDeleteTicket(ticket.id, ticket.code)}
-                          className="py-1.5 px-3 bg-rose-950/60 hover:bg-rose-900 border border-rose-800/80 text-rose-300 rounded-lg text-xs font-medium flex items-center justify-center transition-colors"
+                          className="py-1.5 px-3 bg-rose-950/60 hover:bg-rose-900 border border-rose-800/80 text-rose-300 rounded-lg text-xs font-medium flex items-center justify-center transition-colors shrink-0"
                           title="Apagar este chamado permanentemente"
                         >
                           <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                        </button>
+                        <button 
+                          onClick={() => toggleArchiveTicket(ticket.id)}
+                          className={`py-1.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center transition-all shrink-0 border shadow-sm ${
+                            ticket.archived 
+                              ? 'bg-emerald-500/10 hover:bg-emerald-500/20 border-emerald-500/50 text-emerald-400' 
+                              : (ticket.status === 'Resolvido' || ticket.status === 'Fechado')
+                                ? 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-500/60 text-amber-400 ring-1 ring-amber-500/20'
+                                : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-400'
+                          }`}
+                          title={ticket.archived ? "Desarquivar (voltar para lista principal)" : "Arquivar (ocultar do dashboard e gerenciamento)"}
+                        >
+                          <HardDrive className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </div>
@@ -2494,6 +2702,19 @@ export default function App() {
                                 title="Apagar este chamado permanentemente"
                               >
                                 <Trash2 className="w-3.5 h-3.5 shrink-0 text-rose-400" />
+                              </button>
+                              <button 
+                                onClick={() => toggleArchiveTicket(ticket.id)}
+                                className={`p-1.5 rounded-lg text-xs font-bold transition-all inline-flex items-center border shadow-sm ${
+                                  ticket.archived 
+                                    ? 'bg-emerald-500/10 hover:bg-emerald-500/20 border-emerald-500/50 text-emerald-400' 
+                                    : (ticket.status === 'Resolvido' || ticket.status === 'Fechado')
+                                      ? 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-500/60 text-amber-400 ring-1 ring-amber-500/20'
+                                      : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-400'
+                                }`}
+                                title={ticket.archived ? "Desarquivar" : "Arquivar (ocultar)"}
+                              >
+                                <HardDrive className="w-3.5 h-3.5 shrink-0" />
                               </button>
                             </div>
                           </td>
@@ -2681,11 +2902,25 @@ export default function App() {
                       <div className="min-w-0">
                         <h3 className="font-bold text-white text-sm sm:text-base truncate">{tc.name}</h3>
                         <div className="text-[11px] sm:text-xs text-slate-400 mt-0.5 truncate">{tc.specialty}</div>
+                        {tc.username && (
+                          <div className="text-[11px] text-emerald-400 font-mono mt-1 flex items-center gap-1">
+                            <span>🔑 @{tc.username}</span>
+                            {tc.password && <span className="text-slate-500">• Senha ativa</span>}
+                          </div>
+                        )}
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
                         <span className={`px-2 py-0.5 text-[10px] sm:text-xs font-semibold rounded-md shrink-0 ${tc.type === 'Interno' ? 'bg-blue-950 text-blue-300 border border-blue-800' : 'bg-purple-950 text-purple-300 border border-purple-800'}`}>
                           {tc.type} {tc.company ? `• ${tc.company}` : ''}
                         </span>
+                        <button
+                          type="button"
+                          onClick={() => setEditingTechnician(tc)}
+                          className="text-slate-400 hover:text-blue-400 p-1 rounded hover:bg-slate-900 transition-colors"
+                          title="Editar dados, usuário e senha"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
                         <button
                           type="button"
                           onClick={() => handleDeleteTechnician(tc.id)}
@@ -3268,6 +3503,17 @@ export default function App() {
                     <option value="Fechado">Fechado</option>
                     <option value="Cancelado">Cancelado</option>
                   </select>
+                </div>
+
+                <div className="flex-1 space-y-2">
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider">Visibilidade</label>
+                  <button
+                    onClick={() => toggleArchiveTicket(selectedTicket.id)}
+                    className={`w-full py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 border ${selectedTicket.archived ? 'bg-amber-500/10 border-amber-500/50 text-amber-400 hover:bg-amber-500/20' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`}
+                  >
+                    <HardDrive className="w-3.5 h-3.5" />
+                    <span>{selectedTicket.archived ? 'Desarquivar Chamado' : 'Arquivar Chamado'}</span>
+                  </button>
                 </div>
               </div>
 
@@ -4082,6 +4328,29 @@ export default function App() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Usuário de Acesso</label>
+                  <input 
+                    type="text" 
+                    placeholder="Ex: carlos.ti"
+                    value={techUsername}
+                    onChange={(e) => setTechUsername(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-emerald-500 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Senha de Acesso</label>
+                  <input 
+                    type="password" 
+                    placeholder="••••••••"
+                    value={techPassword}
+                    onChange={(e) => setTechPassword(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-emerald-500 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
                   <label className="block text-xs font-semibold text-slate-400 mb-1">Telefone / WhatsApp</label>
                   <input 
                     type="text" 
@@ -4116,6 +4385,101 @@ export default function App() {
                   className="w-full sm:w-auto px-5 py-2 bg-emerald-500 text-slate-950 font-bold rounded-lg text-xs hover:bg-emerald-400 flex items-center justify-center"
                 >
                   Cadastrar Técnico
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Technician Modal */}
+      {editingTechnician && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-2.5 sm:p-4">
+          <div className="bg-slate-950 border border-slate-800 rounded-2xl w-full max-w-md max-h-[92vh] overflow-y-auto shadow-2xl min-w-0">
+            <div className="p-3.5 sm:p-6 border-b border-slate-800 flex items-center justify-between sticky top-0 bg-slate-950 z-10 gap-2">
+              <h3 className="font-bold text-sm sm:text-lg text-white truncate">Editar Técnico / Credenciais</h3>
+              <button onClick={() => setEditingTechnician(null)} className="text-slate-400 hover:text-white p-1 rounded-lg bg-slate-900 shrink-0">✕</button>
+            </div>
+
+            <form onSubmit={handleSaveEditedTechnician} className="p-4 sm:p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1">Nome do Técnico / Contato</label>
+                <input 
+                  type="text" 
+                  required
+                  value={editingTechnician.name}
+                  onChange={(e) => setEditingTechnician({ ...editingTechnician, name: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Usuário de Acesso</label>
+                  <input 
+                    type="text" 
+                    placeholder="Ex: carlos.ti"
+                    value={editingTechnician.username || ''}
+                    onChange={(e) => setEditingTechnician({ ...editingTechnician, username: e.target.value })}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-blue-500 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Senha de Acesso</label>
+                  <input 
+                    type="text" 
+                    placeholder="Nova senha ou manter"
+                    value={editingTechnician.password || ''}
+                    onChange={(e) => setEditingTechnician({ ...editingTechnician, password: e.target.value })}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-blue-500 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1">Especialidade</label>
+                <input 
+                  type="text" 
+                  value={editingTechnician.specialty || ''}
+                  onChange={(e) => setEditingTechnician({ ...editingTechnician, specialty: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Telefone / WhatsApp</label>
+                  <input 
+                    type="text" 
+                    value={editingTechnician.phone || ''}
+                    onChange={(e) => setEditingTechnician({ ...editingTechnician, phone: e.target.value })}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">E-mail</label>
+                  <input 
+                    type="email" 
+                    value={editingTechnician.email || ''}
+                    onChange={(e) => setEditingTechnician({ ...editingTechnician, email: e.target.value })}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2.5 pt-4 border-t border-slate-900 flex-wrap">
+                <button 
+                  type="button"
+                  onClick={() => setEditingTechnician(null)}
+                  className="w-full sm:w-auto px-4 py-2 bg-slate-900 text-slate-300 rounded-lg text-xs hover:bg-slate-800"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  type="submit"
+                  className="w-full sm:w-auto px-5 py-2 bg-blue-600 text-white font-bold rounded-lg text-xs hover:bg-blue-500 flex items-center justify-center shadow"
+                >
+                  Salvar Alterações
                 </button>
               </div>
             </form>

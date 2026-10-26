@@ -4,16 +4,18 @@
  */
 
 import React, { useState } from 'react';
-import { Lock, Mail, Eye, EyeOff, ShieldCheck, ArrowRight, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Lock, Mail, Eye, EyeOff, ShieldCheck, ArrowRight, AlertCircle, CheckCircle2, Wrench, ExternalLink } from 'lucide-react';
 
 interface AdminLoginProps {
   onLoginSuccess: () => void;
+  onGoToTechnician?: () => void;
+  onGoToPublicPortal?: () => void;
 }
 
 const ADMIN_EMAIL = 'digitalpersonal@gmail.com';
 const ADMIN_PASS = 'Mld3602#?+';
 
-export default function AdminLogin({ onLoginSuccess }: AdminLoginProps) {
+export default function AdminLogin({ onLoginSuccess, onGoToTechnician, onGoToPublicPortal }: AdminLoginProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -125,6 +127,31 @@ export default function AdminLogin({ onLoginSuccess }: AdminLoginProps) {
             )}
           </button>
         </form>
+
+        {/* Dedicated shortcuts for technicians and civil servants */}
+        <div className="pt-2 border-t border-slate-800 space-y-2">
+          {onGoToTechnician && (
+            <button
+              type="button"
+              onClick={onGoToTechnician}
+              className="w-full py-2.5 px-3.5 bg-slate-950 hover:bg-slate-800 border border-emerald-500/40 text-emerald-300 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 shadow-sm group"
+            >
+              <Wrench className="w-4 h-4 text-emerald-400 group-hover:rotate-45 transition-transform" />
+              <span>É um Técnico? Acessar Painel de Chamados</span>
+            </button>
+          )}
+
+          {onGoToPublicPortal && (
+            <button
+              type="button"
+              onClick={onGoToPublicPortal}
+              className="w-full py-2 px-3.5 text-slate-400 hover:text-slate-200 text-xs font-medium transition-colors flex items-center justify-center gap-1.5"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span>Servidor Municipal: Abrir Novo Chamado</span>
+            </button>
+          )}
+        </div>
       </div>
 
       <footer className="mt-8 text-center text-xs text-slate-600">

@@ -487,6 +487,7 @@ async function startServer() {
         status: 'Aberto',
         priority: priority || 'Média',
         deadline: deadline || undefined,
+        archived: false,
         createdAt: now,
         updatedAt: now,
         notes: [

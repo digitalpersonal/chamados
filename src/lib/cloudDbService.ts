@@ -172,7 +172,8 @@ export async function syncWithSupabase(localState: {
               partsUsed: t.parts_used || [],
               resolutionNotes: t.resolution_notes || undefined,
               cost: t.cost ? Number(t.cost) : undefined,
-              aiDiagnosis: t.ai_diagnosis || undefined
+              aiDiagnosis: t.ai_diagnosis || undefined,
+              archived: t.is_archived || false
             });
           }
         });
@@ -340,7 +341,8 @@ export async function pushStateToSupabase(
         updated_at: t.updatedAt,
         resolution_notes: t.resolutionNotes || null,
         cost: t.cost || 0,
-        ai_diagnosis: t.aiDiagnosis || null
+        ai_diagnosis: t.aiDiagnosis || null,
+        is_archived: t.archived || false
       }));
       await client.from('tickets').upsert(ticketPayload, { onConflict: 'id' });
     }
@@ -371,7 +373,8 @@ export async function saveTicketToSupabase(ticket: Ticket, allTickets: Ticket[])
       updated_at: ticket.updatedAt,
       resolution_notes: ticket.resolutionNotes || null,
       cost: ticket.cost || 0,
-      ai_diagnosis: ticket.aiDiagnosis || null
+      ai_diagnosis: ticket.aiDiagnosis || null,
+      is_archived: ticket.archived || false
     }, { onConflict: 'id' });
 
     // 2. Upsert notes if any

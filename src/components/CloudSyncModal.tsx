@@ -298,7 +298,8 @@ CREATE TABLE IF NOT EXISTS public.tickets (
   resolution_notes TEXT,
   cost NUMERIC DEFAULT 0,
   deadline TEXT,
-  ai_diagnosis JSONB
+  ai_diagnosis JSONB,
+  is_archived BOOLEAN DEFAULT FALSE
 );
 
 CREATE TABLE IF NOT EXISTS public.ticket_notes (

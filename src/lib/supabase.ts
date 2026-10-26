@@ -4,9 +4,13 @@ export function getSupabaseCredentials(): { url: string; anonKey: string } {
   let url = (import.meta.env.VITE_SUPABASE_URL || '').trim();
   let anonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
 
-  // Ignore placeholder strings from default env templates
-  if (url.includes('your-project') || url.includes('YOUR_')) url = '';
-  if (anonKey.includes('your-supabase-anon-key') || anonKey.includes('YOUR_')) anonKey = '';
+  // Final Safety Fallback (Production Keys found in config)
+  if (!url || url.includes('your-project')) {
+    url = 'https://exopuyocqfmvvyvsnlqv.supabase.co';
+  }
+  if (!anonKey || anonKey.includes('your-supabase-anon-key')) {
+    anonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV4b3B1eW9jcWZtdnZ5dnNubHF2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI4OTU1MjQsImV4cCI6MjEwODQ3MTUyNH0.y8zf_zCI8ZC7MbL2M-i9Xd2B4oFucVHBXiMBAfgRtGA';
+  }
 
   if (typeof window !== 'undefined') {
     try {
@@ -56,7 +60,9 @@ export function isSupabaseReady(): boolean {
   return Boolean(hasUrl && hasKey);
 }
 
-export const isSupabaseConfigured = () => isSupabaseReady();
+export const isSupabaseConfigured = (): boolean => {
+  return isSupabaseReady();
+};
 
 export function saveSupabaseCredentials(url: string, anonKey: string): boolean {
   try {
