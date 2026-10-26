@@ -107,6 +107,99 @@ export const DEFAULT_DEPARTMENTS = sortDepartments([
   'Secretaria de Saúde'
 ]);
 
+export const calculateDefaultDeadline = (priority: Priority, fromDate: Date = new Date()): string => {
+  const date = new Date(fromDate);
+  switch (priority) {
+    case 'Crítica':
+      date.setHours(date.getHours() + 24);
+      break;
+    case 'Alta':
+      date.setHours(date.getHours() + 24);
+      break;
+    case 'Média':
+      date.setHours(date.getHours() + 48);
+      break;
+    case 'Baixa':
+      date.setHours(date.getHours() + 72);
+      break;
+  }
+  return date.toISOString();
+};
+
+export const formatSlaDate = (deadlineStr?: string): string => {
+  if (!deadlineStr) return 'Não informada';
+  try {
+    const d = new Date(deadlineStr);
+    if (isNaN(d.getTime())) return deadlineStr;
+    return d.toLocaleDateString('pt-BR') + ' às ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  } catch (e) {
+    return deadlineStr;
+  }
+};
+
+export const getSlaStatus = (deadlineStr?: string, status?: TicketStatus) => {
+  if (status === 'Resolvido' || status === 'Fechado' || status === 'Cancelado') {
+    return {
+      type: 'completed',
+      label: 'Concluído',
+      badgeClass: 'bg-slate-800/80 text-slate-300 border-slate-700'
+    };
+  }
+  if (!deadlineStr) {
+    return {
+      type: 'none',
+      label: 'Prazo a definir',
+      badgeClass: 'bg-slate-800/80 text-slate-400 border-slate-700'
+    };
+  }
+
+  const deadlineMs = new Date(deadlineStr).getTime();
+  if (isNaN(deadlineMs)) {
+    return {
+      type: 'none',
+      label: 'Prazo a definir',
+      badgeClass: 'bg-slate-800/80 text-slate-400 border-slate-700'
+    };
+  }
+
+  const now = Date.now();
+  const diffHours = (deadlineMs - now) / (1000 * 60 * 60);
+
+  if (diffHours < 0) {
+    const hoursLate = Math.abs(Math.floor(diffHours));
+    return {
+      type: 'overdue',
+      label: `Vencido (-${hoursLate}h)`,
+      badgeClass: 'bg-rose-500/20 text-rose-300 border-rose-500/50 font-bold animate-pulse'
+    };
+  } else if (diffHours <= 24) {
+    const hoursLeft = Math.max(1, Math.ceil(diffHours));
+    return {
+      type: 'warning',
+      label: `Vence em ${hoursLeft}h`,
+      badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/50 font-bold'
+    };
+  } else {
+    return {
+      type: 'ok',
+      label: 'No Prazo',
+      badgeClass: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50 font-medium'
+    };
+  }
+};
+
+export const isoToDatetimeLocal = (isoStr?: string): string => {
+  if (!isoStr) return '';
+  try {
+    const d = new Date(isoStr);
+    if (isNaN(d.getTime())) return '';
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  } catch (e) {
+    return '';
+  }
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'tickets' | 'equipment' | 'technicians' | 'departments'>('dashboard');
   
@@ -593,7 +686,7 @@ export default function App() {
       technicianId: newTechId || undefined,
       createdAt: now,
       updatedAt: now,
-      deadline: newDeadline || undefined,
+      deadline: newDeadline ? new Date(newDeadline).toISOString() : calculateDefaultDeadline(newPriority, new Date(now)),
       notes: [
         { id: `n-${Date.now()}`, author: 'Administrador (Prefeitura)', text: 'Chamado cadastrado no sistema.', timestamp: now }
       ],
@@ -2115,6 +2208,23 @@ export default function App() {
                         </span>
                       </div>
 
+                      {/* SLA Solution Deadline */}
+                      {(() => {
+                        const dl = ticket.deadline || calculateDefaultDeadline(ticket.priority, new Date(ticket.createdAt));
+                        const sla = getSlaStatus(dl, ticket.status);
+                        return (
+                          <div className="p-2 bg-slate-900/80 rounded-lg border border-slate-800/80 flex items-center justify-between text-[11px] gap-2 flex-wrap">
+                            <span className="text-slate-300 flex items-center gap-1 font-medium">
+                              <Clock3 className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                              <span>Previsão Solução: <strong className="text-white">{formatSlaDate(dl)}</strong></span>
+                            </span>
+                            <span className={`px-2 py-0.5 rounded text-[10px] border ${sla.badgeClass}`}>
+                              {sla.label}
+                            </span>
+                          </div>
+                        );
+                      })()}
+
                       <div className="flex items-center gap-1.5 pt-1">
                         <button 
                           onClick={() => setSelectedTicket(ticket)}
@@ -2157,6 +2267,7 @@ export default function App() {
                       <th className="px-4 sm:px-6 py-3 font-semibold">Equipamento / Setor</th>
                       <th className="px-4 sm:px-6 py-3 font-semibold">Título</th>
                       <th className="px-4 sm:px-6 py-3 font-semibold">Prioridade</th>
+                      <th className="px-4 sm:px-6 py-3 font-semibold">Previsão Solução (SLA)</th>
                       <th className="px-4 sm:px-6 py-3 font-semibold">Técnico Responsável</th>
                       <th className="px-4 sm:px-6 py-3 font-semibold">Status</th>
                       <th className="px-4 sm:px-6 py-3 font-semibold text-right">Ações</th>
@@ -2211,6 +2322,25 @@ export default function App() {
                           </td>
                           <td className="px-4 sm:px-6 py-3.5 whitespace-nowrap">
                             {getPriorityBadge(ticket.priority)}
+                          </td>
+                          <td className="px-4 sm:px-6 py-3.5 whitespace-nowrap">
+                            {(() => {
+                              const dl = ticket.deadline || calculateDefaultDeadline(ticket.priority, new Date(ticket.createdAt));
+                              const sla = getSlaStatus(dl, ticket.status);
+                              return (
+                                <div>
+                                  <div className="flex items-center gap-1.5 text-xs text-slate-200 font-medium">
+                                    <Clock3 className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                                    <span>{formatSlaDate(dl)}</span>
+                                  </div>
+                                  <div className="mt-0.5">
+                                    <span className={`px-2 py-0.5 rounded text-[10px] border ${sla.badgeClass}`}>
+                                      {sla.label}
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </td>
                           <td className="px-4 sm:px-6 py-3.5 whitespace-nowrap">
                             <div className="text-xs font-medium text-white">{tech ? tech.name : <span className="text-amber-500 italic">Não atribuído</span>}</div>
@@ -2608,51 +2738,232 @@ export default function App() {
               </div>
 
               {/* Printable Preview Area */}
-              <div className="bg-white text-slate-900 rounded-xl p-4 sm:p-8 shadow-inner space-y-6 print:p-0 print:shadow-none">
-                <div className="text-center border-b border-slate-300 pb-4">
-                  <h2 className="text-lg sm:text-xl font-bold uppercase tracking-wide">Prefeitura Municipal de Guaranésia</h2>
-                  <p className="text-xs text-slate-600">Sistema de Controle de Chamados e Manutenção (SCM)</p>
-                  <h3 className="text-base sm:text-lg font-semibold mt-3">Relatório Oficial de Chamados Técnicos</h3>
-                  <p className="text-[11px] sm:text-xs text-slate-500 mt-1">Gerado em: {new Date().toLocaleString('pt-BR')} | Total de registros: {printableTickets.length}</p>
+              <div className="printable-document bg-white text-slate-950 rounded-xl p-6 sm:p-10 shadow-2xl border-2 border-slate-900 space-y-6 print:p-0 print:border-none print:shadow-none">
+                {/* Municipal Letterhead Header */}
+                <div className="text-center border-b-2 border-slate-900 pb-5 space-y-1">
+                  <div className="text-xl sm:text-2xl font-black uppercase tracking-wider text-black">
+                    Prefeitura Municipal de Guaranésia - MG
+                  </div>
+                  <div className="text-xs sm:text-sm font-bold text-slate-800 uppercase tracking-wide">
+                    Secretaria Municipal de Administração • Departamento de TI & Manutenção
+                  </div>
+                  <div className="text-base sm:text-lg font-black uppercase tracking-wide text-emerald-950 pt-2 border-t border-slate-300 mt-2 inline-block px-4">
+                    {printSingleTicketId ? 'ORDEM DE SERVIÇO DE MANUTENÇÃO (O.S.)' : 'RELATÓRIO DE CHAMADOS E ORDENS DE SERVIÇO'}
+                  </div>
+                  <div className="text-xs text-slate-600 font-medium">
+                    Data de Emissão: {new Date().toLocaleDateString('pt-BR')} às {new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })} | Registros: {printableTickets.length}
+                  </div>
                 </div>
 
-                <div className="space-y-4">
-                  {printableTickets.map((t, i) => {
-                    const tech = technicians.find(tc => tc.id === t.technicianId);
+                {/* Printable Content: Single Work Order vs General Report */}
+                {printSingleTicketId && printableTickets.length === 1 ? (
+                  /* Single Ticket Work Order (OS Individual) */
+                  (() => {
+                    const ticket = printableTickets[0];
+                    const tech = technicians.find(tc => tc.id === ticket.technicianId);
+                    const deadline = ticket.deadline || calculateDefaultDeadline(ticket.priority, new Date(ticket.createdAt));
+                    const sla = getSlaStatus(deadline, ticket.status);
                     return (
-                      <div key={t.id} className="border border-slate-300 rounded-lg p-3 sm:p-4 text-xs space-y-2 break-inside-avoid">
-                        <div className="flex justify-between items-center font-bold border-b border-slate-200 pb-1 gap-2 flex-wrap">
-                          <span>{i + 1}. [{t.code}] {t.title}</span>
-                          <span className="px-2 py-0.5 bg-slate-200 rounded">{t.status}</span>
-                        </div>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-slate-700">
-                          <div><strong>Data/Hora:</strong> {new Date(t.createdAt).toLocaleString('pt-BR')}</div>
-                          <div><strong>Equipamento:</strong> {t.equipmentType}</div>
-                          <div><strong>Setor:</strong> {t.department}</div>
-                          <div><strong>Técnico:</strong> {tech ? `${tech.name} (${tech.type})` : 'Não atribuído'}</div>
-                        </div>
-                        <div className="text-slate-800">
-                          <strong>Descrição:</strong> {t.description}
-                        </div>
-                        {t.aiDiagnosis && (
-                          <div className="bg-slate-50 p-2 rounded border border-slate-200 text-slate-700">
-                            <strong>Diagnóstico IA:</strong> {t.aiDiagnosis.diagnostico}
+                      <div className="printable-card space-y-6 text-sm sm:text-base text-black font-sans leading-relaxed">
+                        {/* OS Header Number */}
+                        <div className="flex justify-between items-center bg-slate-100 p-4 border-2 border-slate-900 rounded-lg">
+                          <div>
+                            <span className="text-xs font-bold uppercase text-slate-600 block">Número da Ordem de Serviço</span>
+                            <span className="text-xl sm:text-2xl font-black font-mono text-black">{ticket.code}</span>
                           </div>
-                        )}
-                        {t.partsUsed && t.partsUsed.length > 0 && (
-                          <div className="bg-emerald-50 p-2 rounded border border-emerald-200 text-emerald-900 text-xs">
-                            <strong>Peças / Equipamentos Utilizados no Atendimento:</strong> {t.partsUsed.join(', ')}
+                          <div className="text-right">
+                            <span className="text-xs font-bold uppercase text-slate-600 block">Status do Atendimento</span>
+                            <span className="text-sm sm:text-base font-bold px-3 py-1 bg-white border border-slate-900 rounded text-black uppercase">
+                              {ticket.status}
+                            </span>
                           </div>
-                        )}
+                        </div>
+
+                        {/* Requester & Sector Box */}
+                        <div className="border-2 border-slate-900 rounded-lg p-4 space-y-3">
+                          <h4 className="text-sm font-black uppercase tracking-wider text-black border-b border-slate-900 pb-1">
+                            1. Dados do Solicitante & Setor
+                          </h4>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                            <div><strong>Secretaria / Setor:</strong> <span className="font-semibold">{ticket.department}</span></div>
+                            <div><strong>Servidor Solicitante:</strong> <span className="font-semibold">{ticket.requesterName || 'Não informado'}</span></div>
+                            <div><strong>Contato / WhatsApp:</strong> <span className="font-semibold">{ticket.requesterContact || 'Não informado'}</span></div>
+                            <div><strong>Data de Abertura:</strong> <span className="font-semibold">{new Date(ticket.createdAt).toLocaleString('pt-BR')}</span></div>
+                          </div>
+                        </div>
+
+                        {/* Service Demand & SLA Box */}
+                        <div className="border-2 border-slate-900 rounded-lg p-4 space-y-3">
+                          <h4 className="text-sm font-black uppercase tracking-wider text-black border-b border-slate-900 pb-1">
+                            2. Equipamento & Prazo Previsto (SLA)
+                          </h4>
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+                            <div><strong>Serviço / Equipamento:</strong> <span className="font-semibold">{ticket.equipmentType}</span></div>
+                            <div><strong>Prioridade:</strong> <span className="font-bold">{ticket.priority}</span></div>
+                            <div className="bg-slate-100 p-2 border border-slate-900 rounded">
+                              <strong>Data Prevista de Solução (SLA):</strong>
+                              <div className="font-black text-base font-mono mt-0.5">{formatSlaDate(deadline)}</div>
+                              <div className="text-xs font-semibold text-slate-700">Situacão SLA: {sla.label}</div>
+                            </div>
+                          </div>
+                          <div className="pt-2">
+                            <strong>Descrição do Problema:</strong>
+                            <p className="p-3 bg-slate-50 border border-slate-400 rounded mt-1 font-medium text-slate-900">
+                              {ticket.description}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Technical Execution Box */}
+                        <div className="border-2 border-slate-900 rounded-lg p-4 space-y-3">
+                          <h4 className="text-sm font-black uppercase tracking-wider text-black border-b border-slate-900 pb-1">
+                            3. Execução Técnica & Peças Utilizadas
+                          </h4>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                            <div><strong>Técnico Responsável:</strong> <span className="font-bold">{tech ? `${tech.name} (${tech.type})` : 'Não atribuído'}</span></div>
+                            <div><strong>Empresa / Prestador:</strong> <span className="font-semibold">{tech?.company || 'Prefeitura Municipal'}</span></div>
+                          </div>
+
+                          {ticket.resolutionNotes && (
+                            <div className="pt-1">
+                              <strong>Laudo Técnico / Observações de Resolução:</strong>
+                              <p className="p-2.5 bg-slate-50 border border-slate-300 rounded mt-1 text-sm font-medium">
+                                {ticket.resolutionNotes}
+                              </p>
+                            </div>
+                          )}
+
+                          <div>
+                            <strong>Peças / Materiais Aplicados:</strong>
+                            {ticket.partsUsed && ticket.partsUsed.length > 0 ? (
+                              <div className="flex flex-wrap gap-2 mt-1.5">
+                                {ticket.partsUsed.map((p, pIdx) => (
+                                  <span key={pIdx} className="px-3 py-1 bg-slate-200 border border-slate-900 text-black font-bold text-xs rounded">
+                                    ✓ {p}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-slate-600 italic block mt-1">Nenhum material registrado.</span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Signature Block */}
+                        <div className="pt-8 border-t-2 border-slate-900 grid grid-cols-1 sm:grid-cols-2 gap-8 text-center text-xs sm:text-sm font-bold">
+                          <div className="space-y-12">
+                            <div className="border-b-2 border-black w-3/4 mx-auto"></div>
+                            <div>
+                              <div>TÉCNICO RESPONSÁVEL</div>
+                              <div className="text-slate-600 font-normal">{tech ? tech.name : 'Assinatura do Técnico'}</div>
+                            </div>
+                          </div>
+                          <div className="space-y-12">
+                            <div className="border-b-2 border-black w-3/4 mx-auto"></div>
+                            <div>
+                              <div>RESPONSÁVEL PELO SETOR</div>
+                              <div className="text-slate-600 font-normal">{ticket.department}</div>
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     );
-                  })}
-                  {printableTickets.length === 0 && (
-                    <div className="text-center py-8 text-slate-500">
-                      Nenhum chamado encontrado com os filtros de impressão selecionados.
+                  })()
+                ) : (
+                  /* General Maintenance Tickets List Report */
+                  <div className="space-y-6">
+                    {/* KPI Totals Summary */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center text-xs sm:text-sm font-bold bg-slate-100 p-3.5 border-2 border-slate-900 rounded-lg">
+                      <div className="border-r border-slate-300 pr-2">
+                        <span className="text-slate-600 text-xs block font-normal">Total Chamados</span>
+                        <span className="text-base sm:text-lg font-black">{printableTickets.length}</span>
+                      </div>
+                      <div className="border-r border-slate-300 pr-2">
+                        <span className="text-slate-600 text-xs block font-normal">Resolvidos / Concluídos</span>
+                        <span className="text-base sm:text-lg font-black text-emerald-800">
+                          {printableTickets.filter(t => t.status === 'Resolvido' || t.status === 'Fechado').length}
+                        </span>
+                      </div>
+                      <div className="border-r border-slate-300 pr-2">
+                        <span className="text-slate-600 text-xs block font-normal">Em Andamento / Aberto</span>
+                        <span className="text-base sm:text-lg font-black text-blue-800">
+                          {printableTickets.filter(t => t.status === 'Aberto' || t.status === 'Em Andamento' || t.status === 'Aguardando Peças').length}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-600 text-xs block font-normal">Prazos Vencidos</span>
+                        <span className="text-base sm:text-lg font-black text-rose-800">
+                          {printableTickets.filter(t => {
+                            const dl = t.deadline || calculateDefaultDeadline(t.priority, new Date(t.createdAt));
+                            return getSlaStatus(dl, t.status).type === 'overdue';
+                          }).length}
+                        </span>
+                      </div>
                     </div>
-                  )}
-                </div>
+
+                    {/* Table / Cards List */}
+                    <div className="space-y-4">
+                      {printableTickets.map((t, i) => {
+                        const tech = technicians.find(tc => tc.id === t.technicianId);
+                        const deadline = t.deadline || calculateDefaultDeadline(t.priority, new Date(t.createdAt));
+                        const sla = getSlaStatus(deadline, t.status);
+
+                        return (
+                          <div key={t.id} className="printable-card border-2 border-slate-900 rounded-lg p-4 text-xs sm:text-sm space-y-2.5 break-inside-avoid">
+                            <div className="flex justify-between items-center font-bold border-b border-slate-300 pb-2 gap-2 flex-wrap">
+                              <span className="text-base font-black">
+                                {i + 1}. [{t.code}] {t.title}
+                              </span>
+                              <span className="px-3 py-1 bg-slate-200 border border-slate-900 rounded font-black uppercase text-xs">
+                                {t.status}
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-slate-800 text-xs sm:text-sm pt-1">
+                              <div><strong>Abertura:</strong> {new Date(t.createdAt).toLocaleDateString('pt-BR')} {new Date(t.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</div>
+                              <div><strong>Setor:</strong> {t.department}</div>
+                              <div><strong>Equipamento:</strong> {t.equipmentType}</div>
+                              <div><strong>Técnico:</strong> {tech ? `${tech.name} (${tech.type})` : 'Não atribuído'}</div>
+                            </div>
+
+                            <div className="bg-slate-100 p-2 border border-slate-300 rounded flex justify-between items-center flex-wrap gap-2 text-xs sm:text-sm font-medium">
+                              <span><strong>Data Prevista para Solução (SLA):</strong> <strong className="font-mono text-black font-bold">{formatSlaDate(deadline)}</strong></span>
+                              <span className="font-bold border px-2 py-0.5 rounded bg-white">{sla.label}</span>
+                            </div>
+
+                            <div className="text-slate-900 text-xs sm:text-sm">
+                              <strong>Descrição do Problema:</strong> {t.description}
+                            </div>
+
+                            {t.partsUsed && t.partsUsed.length > 0 && (
+                              <div className="bg-emerald-50 p-2 rounded border border-emerald-300 text-emerald-950 text-xs sm:text-sm font-semibold">
+                                <strong>Peças / Materiais Utilizados:</strong> {t.partsUsed.join(', ')}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+
+                      {printableTickets.length === 0 && (
+                        <div className="text-center py-12 text-slate-500 font-medium">
+                          Nenhum chamado encontrado com os filtros de impressão selecionados.
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Report Sign-off Footer */}
+                    <div className="pt-10 border-t-2 border-slate-900 grid grid-cols-1 sm:grid-cols-2 gap-8 text-center text-xs sm:text-sm font-bold">
+                      <div className="space-y-12">
+                        <div className="border-b-2 border-black w-3/4 mx-auto"></div>
+                        <div>RESPONSÁVEL PELA IMPRESSÃO / TI</div>
+                      </div>
+                      <div className="space-y-12">
+                        <div className="border-b-2 border-black w-3/4 mx-auto"></div>
+                        <div>SECRETARIA MUNICIPAL DE ADMINISTRAÇÃO</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -2754,9 +3065,37 @@ export default function App() {
                   <span>Secretaria/Setor: <strong className="text-white">{selectedTicket.department}</strong></span>
                   <span>Equipamento: <strong className="text-white">{selectedTicket.equipmentType}</strong></span>
                   <span>Prioridade: {getPriorityBadge(selectedTicket.priority)}</span>
-                  <span>Data: <strong className="text-white">{new Date(selectedTicket.createdAt).toLocaleString('pt-BR')}</strong></span>
+                  <span>Abertura: <strong className="text-white">{new Date(selectedTicket.createdAt).toLocaleString('pt-BR')}</strong></span>
                 </div>
               </div>
+
+              {/* SLA Resolution Deadline Card */}
+              {(() => {
+                const dl = selectedTicket.deadline || calculateDefaultDeadline(selectedTicket.priority, new Date(selectedTicket.createdAt));
+                const sla = getSlaStatus(dl, selectedTicket.status);
+                return (
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-cyan-950/80 border border-cyan-800 flex items-center justify-center text-cyan-400 shrink-0">
+                        <Clock3 className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
+                          Data Prevista para Solução do Problema (SLA)
+                        </span>
+                        <span className="text-sm sm:text-base font-bold text-white font-mono mt-0.5 block">
+                          {formatSlaDate(dl)}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="shrink-0 flex items-center gap-2">
+                      <span className={`px-3 py-1 rounded-lg text-xs border ${sla.badgeClass}`}>
+                        {sla.label}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Description */}
               <div className="bg-slate-900 border border-slate-800/80 rounded-xl p-3.5 sm:p-4">
@@ -3107,7 +3446,14 @@ export default function App() {
                   </label>
                   <select 
                     value={editingTicket.priority}
-                    onChange={(e) => setEditingTicket({ ...editingTicket, priority: e.target.value as Priority })}
+                    onChange={(e) => {
+                      const newP = e.target.value as Priority;
+                      setEditingTicket({ 
+                        ...editingTicket, 
+                        priority: newP,
+                        deadline: calculateDefaultDeadline(newP, new Date(editingTicket.createdAt))
+                      });
+                    }}
                     className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
                   >
                     <option value="Baixa">Baixa</option>
@@ -3115,6 +3461,71 @@ export default function App() {
                     <option value="Alta">Alta</option>
                     <option value="Crítica">Crítica</option>
                   </select>
+                </div>
+              </div>
+
+              {/* Data Prevista para Solução do Problema (SLA) */}
+              <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 sm:p-4 space-y-2">
+                <label className="block text-xs font-bold text-cyan-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <Clock3 className="w-4 h-4 text-cyan-400" />
+                  <span>Data Prevista para Solução do Problema (SLA)</span>
+                </label>
+                <div className="flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center">
+                  <input 
+                    type="datetime-local"
+                    value={isoToDatetimeLocal(editingTicket.deadline || calculateDefaultDeadline(editingTicket.priority, new Date(editingTicket.createdAt)))}
+                    onChange={(e) => setEditingTicket({
+                      ...editingTicket,
+                      deadline: e.target.value ? new Date(e.target.value).toISOString() : undefined
+                    })}
+                    className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-cyan-500"
+                  />
+                  <div className="flex flex-wrap gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = new Date();
+                        d.setHours(d.getHours() + 24);
+                        setEditingTicket({ ...editingTicket, deadline: d.toISOString() });
+                      }}
+                      className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-medium rounded border border-slate-700"
+                    >
+                      +24h
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = new Date();
+                        d.setHours(d.getHours() + 48);
+                        setEditingTicket({ ...editingTicket, deadline: d.toISOString() });
+                      }}
+                      className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-medium rounded border border-slate-700"
+                    >
+                      +48h
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = new Date();
+                        d.setHours(d.getHours() + 72);
+                        setEditingTicket({ ...editingTicket, deadline: d.toISOString() });
+                      }}
+                      className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-medium rounded border border-slate-700"
+                    >
+                      +72h
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = new Date();
+                        d.setDate(d.getDate() + 7);
+                        setEditingTicket({ ...editingTicket, deadline: d.toISOString() });
+                      }}
+                      className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-medium rounded border border-slate-700"
+                    >
+                      +7d
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -3406,14 +3817,65 @@ export default function App() {
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-1">Prazo de Entrega Estimado</label>
-                <input 
-                  type="date"
-                  value={newDeadline}
-                  onChange={(e) => setNewDeadline(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
-                />
+              <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 sm:p-4 space-y-2">
+                <label className="block text-xs font-bold text-cyan-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <Clock3 className="w-4 h-4 text-cyan-400" />
+                  <span>Data Prevista para Solução do Problema (SLA)</span>
+                </label>
+                <div className="flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center">
+                  <input 
+                    type="datetime-local"
+                    value={isoToDatetimeLocal(newDeadline || calculateDefaultDeadline(newPriority))}
+                    onChange={(e) => setNewDeadline(e.target.value ? new Date(e.target.value).toISOString() : '')}
+                    className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-cyan-500"
+                  />
+                  <div className="flex flex-wrap gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = new Date();
+                        d.setHours(d.getHours() + 24);
+                        setNewDeadline(d.toISOString());
+                      }}
+                      className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-medium rounded border border-slate-700"
+                    >
+                      +24h
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = new Date();
+                        d.setHours(d.getHours() + 48);
+                        setNewDeadline(d.toISOString());
+                      }}
+                      className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-medium rounded border border-slate-700"
+                    >
+                      +48h
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = new Date();
+                        d.setHours(d.getHours() + 72);
+                        setNewDeadline(d.toISOString());
+                      }}
+                      className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-medium rounded border border-slate-700"
+                    >
+                      +72h
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = new Date();
+                        d.setDate(d.getDate() + 7);
+                        setNewDeadline(d.toISOString());
+                      }}
+                      className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-medium rounded border border-slate-700"
+                    >
+                      +7d
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <div className="flex justify-end gap-2.5 pt-4 border-t border-slate-900 flex-wrap">

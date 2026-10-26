@@ -9,7 +9,7 @@ import {
   CheckCircle2, Send, Search, ArrowLeft, ShieldCheck, 
   HelpCircle, Building2, User, PhoneCall, AlertCircle, Copy, Check
 } from 'lucide-react';
-import { EquipmentType, Priority, Ticket, TicketStatus } from '../App';
+import { EquipmentType, Priority, Ticket, TicketStatus, calculateDefaultDeadline, formatSlaDate, getSlaStatus } from '../App';
 import { saveTicketToSupabase } from '../lib/cloudDbService';
 
 interface PortalServidorProps {
@@ -177,6 +177,7 @@ export default function PortalServidor({
           priority,
           createdAt: now,
           updatedAt: now,
+          deadline: calculateDefaultDeadline(priority, new Date(now)),
           notes: [
             {
               id: `n-${Date.now()}`,
@@ -344,6 +345,21 @@ export default function PortalServidor({
                   <span>Serviço: <strong className="text-slate-200">{searchedTicket.equipmentType}</strong></span>
                   <span>Data: <strong className="text-slate-200">{new Date(searchedTicket.createdAt).toLocaleDateString('pt-BR')}</strong></span>
                 </div>
+                {(() => {
+                  const dl = searchedTicket.deadline || calculateDefaultDeadline(searchedTicket.priority, new Date(searchedTicket.createdAt));
+                  const sla = getSlaStatus(dl, searchedTicket.status);
+                  return (
+                    <div className="mt-2 p-2.5 bg-slate-900 rounded-lg border border-slate-800 flex items-center justify-between text-xs gap-2 flex-wrap">
+                      <span className="text-slate-300 flex items-center gap-1.5 font-medium">
+                        <Clock className="w-3.5 h-3.5 text-cyan-400" />
+                        <span>Previsão de Solução (SLA): <strong className="text-white font-bold font-mono">{formatSlaDate(dl)}</strong></span>
+                      </span>
+                      <span className={`px-2 py-0.5 rounded text-[10px] border ${sla.badgeClass}`}>
+                        {sla.label}
+                      </span>
+                    </div>
+                  );
+                })()}
                 {searchedTicket.notes && searchedTicket.notes.length > 0 && (
                   <div className="mt-2 pt-2 border-t border-slate-800/80">
                     <p className="text-[11px] text-slate-400 font-semibold mb-1">Última atualização:</p>
@@ -395,6 +411,15 @@ export default function PortalServidor({
                 <div className="flex justify-between">
                   <span className="text-slate-400">Status Inicial:</span>
                   <span className="font-semibold text-amber-400">Aberto (Aguardando Atendimento)</span>
+                </div>
+                <div className="flex justify-between border-t border-slate-800/80 pt-2 text-cyan-300 font-medium">
+                  <span className="text-slate-400 flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Previsão de Solução (SLA):</span>
+                  </span>
+                  <span className="font-bold text-white font-mono">
+                    {formatSlaDate(successTicket.deadline)}
+                  </span>
                 </div>
               </div>
 
