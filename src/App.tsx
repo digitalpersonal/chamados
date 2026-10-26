@@ -19,7 +19,8 @@ import {
   saveTicketToSupabase, 
   deleteTicketFromSupabase, 
   saveDepartmentToSupabase, 
-  deleteDepartmentFromSupabase 
+  deleteDepartmentFromSupabase,
+  deleteTechnicianFromSupabase
 } from './lib/cloudDbService';
 import confetti from 'canvas-confetti';
 import PortalServidor from './components/PortalServidor';
@@ -996,6 +997,9 @@ export default function App() {
     try {
       localStorage.setItem('guaranesia_prod_technicians', JSON.stringify(updatedTechs));
     } catch (e) {}
+
+    deleteTechnicianFromSupabase(techId);
+
     try {
       await fetch(`/api/technicians/${techId}`, { method: 'DELETE' });
     } catch (err) {

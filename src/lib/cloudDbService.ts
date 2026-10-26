@@ -15,6 +15,24 @@ export interface CloudSyncResult {
 const sortDepartments = (list: string[]): string[] =>
   [...list].sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
 
+function getDeletedTechIds(): string[] {
+  try {
+    const s = typeof window !== 'undefined' ? localStorage.getItem('guaranesia_deleted_tech_ids') : null;
+    return s ? JSON.parse(s) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function getDeletedDepartments(): string[] {
+  try {
+    const s = typeof window !== 'undefined' ? localStorage.getItem('guaranesia_deleted_departments') : null;
+    return s ? JSON.parse(s) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
 /**
  * Direct Supabase Cloud Database synchronization.
  * Connects directly from the browser to Supabase PostgreSQL,
@@ -88,7 +106,9 @@ export async function syncWithSupabase(localState: {
               company: t.company || undefined,
               phone: t.phone || '',
               email: t.email || '',
-              specialty: t.specialty || ''
+              specialty: t.specialty || '',
+              username: t.username || undefined,
+              password: t.password || undefined
             });
           }
         });
@@ -181,15 +201,17 @@ export async function syncWithSupabase(localState: {
       }
     } catch (e) {}
 
+    const deletedTechIds = getDeletedTechIds();
+    const deletedDepts = getDeletedDepartments();
+
     // 3. Bidirectional merge
-    // Use cloud data as primary, but keep any local data that is newer or missing in cloud
     const mergedDeptsSet = new Set<string>([...cloudDepartments, ...localState.departments]);
-    const mergedDepartments = sortDepartments(Array.from(mergedDeptsSet));
+    const mergedDepartments = sortDepartments(Array.from(mergedDeptsSet)).filter(d => !deletedDepts.some(dd => dd.toLowerCase() === d.toLowerCase()));
 
     const techMap = new Map<string, Technician>();
     cloudTechnicians.forEach(t => techMap.set(t.id, t));
     localState.technicians.forEach(t => { if (!techMap.has(t.id)) techMap.set(t.id, t); });
-    const mergedTechnicians = Array.from(techMap.values());
+    const mergedTechnicians = Array.from(techMap.values()).filter(t => !deletedTechIds.includes(t.id));
 
     const eqMap = new Map<string, Equipment>();
     cloudEquipment.forEach(eq => eqMap.set(eq.id, eq));
@@ -519,3 +541,41 @@ export async function deleteDepartmentFromSupabase(name: string, remainingDepts:
     return false;
   }
 }
+
+/**
+ * Deletes a technician from Supabase
+ */
+export async function deleteTechnicianFromSupabase(techId: string): Promise<boolean> {
+  const client = getSupabaseClient();
+  if (!client || !isSupabaseReady()) return false;
+
+  try {
+    await client.from('technicians').delete().eq('id', techId);
+
+    // Update system_state mirror
+    try {
+      const { data } = await client
+        .from('system_state')
+        .select('payload')
+        .eq('id', 'guaranesia_production_state')
+        .maybeSingle();
+
+      if (data?.payload) {
+        if (Array.isArray(data.payload.technicians)) {
+          data.payload.technicians = data.payload.technicians.filter((t: Technician) => t.id !== techId);
+        }
+        await client.from('system_state').upsert({
+          id: 'guaranesia_production_state',
+          payload: data.payload,
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+      }
+    } catch (e) {}
+
+    return true;
+  } catch (err) {
+    console.warn('Error deleting technician from Supabase:', err);
+    return false;
+  }
+}
+
