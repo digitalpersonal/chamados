@@ -237,6 +237,24 @@ export const isoToDatetimeLocal = (isoStr?: string): string => {
   }
 };
 
+export function getDeletedTechIds(): string[] {
+  try {
+    const s = localStorage.getItem('guaranesia_deleted_tech_ids');
+    return s ? JSON.parse(s) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+export function getDeletedDepartments(): string[] {
+  try {
+    const s = localStorage.getItem('guaranesia_deleted_departments');
+    return s ? JSON.parse(s) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
 export function scanAndRecoverAllLocalStorage(): {
   tickets: Ticket[];
   departments: string[];
@@ -252,6 +270,9 @@ export function scanAndRecoverAllLocalStorage(): {
     return { tickets: [], departments: [], equipment: [], technicians: [] };
   }
 
+  const deletedTechIds = getDeletedTechIds();
+  const deletedDepts = getDeletedDepartments();
+
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
@@ -266,7 +287,10 @@ export function scanAndRecoverAllLocalStorage(): {
           if (typeof parsed[0] === 'string') {
             parsed.forEach((d: string) => {
               if (d && typeof d === 'string' && d.trim().length > 2) {
-                recoveredDepts.add(d.trim());
+                const clean = d.trim();
+                if (!deletedDepts.some(dd => dd.toLowerCase() === clean.toLowerCase())) {
+                  recoveredDepts.add(clean);
+                }
               }
             });
           } else if (typeof parsed[0] === 'object') {
@@ -277,16 +301,24 @@ export function scanAndRecoverAllLocalStorage(): {
                   recoveredTickets.push(item);
                 }
                 if (item.department && typeof item.department === 'string') {
-                  recoveredDepts.add(item.department.trim());
+                  const clean = item.department.trim();
+                  if (!deletedDepts.some(dd => dd.toLowerCase() === clean.toLowerCase())) {
+                    recoveredDepts.add(clean);
+                  }
                 }
               } else if (item.id && item.name && item.type && item.department) {
                 if (!recoveredEq.some(eq => eq.id === item.id)) {
                   recoveredEq.push(item);
                 }
-                recoveredDepts.add(item.department.trim());
+                const clean = item.department.trim();
+                if (!deletedDepts.some(dd => dd.toLowerCase() === clean.toLowerCase())) {
+                  recoveredDepts.add(clean);
+                }
               } else if (item.id && item.name && (item.specialty || item.type)) {
-                if (!recoveredTechs.some(tech => tech.id === item.id)) {
-                  recoveredTechs.push(item);
+                if (!deletedTechIds.includes(item.id)) {
+                  if (!recoveredTechs.some(tech => tech.id === item.id)) {
+                    recoveredTechs.push(item);
+                  }
                 }
               }
             });
@@ -294,7 +326,12 @@ export function scanAndRecoverAllLocalStorage(): {
         } else if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
           if (Array.isArray(parsed.departments)) {
             parsed.departments.forEach((d: any) => {
-              if (typeof d === 'string' && d.trim()) recoveredDepts.add(d.trim());
+              if (typeof d === 'string' && d.trim()) {
+                const clean = d.trim();
+                if (!deletedDepts.some(dd => dd.toLowerCase() === clean.toLowerCase())) {
+                  recoveredDepts.add(clean);
+                }
+              }
             });
           }
           if (Array.isArray(parsed.tickets)) {
@@ -302,7 +339,12 @@ export function scanAndRecoverAllLocalStorage(): {
               if (item && item.id && !recoveredTickets.some(t => t.id === item.id)) {
                 recoveredTickets.push(item);
               }
-              if (item && item.department) recoveredDepts.add(item.department.trim());
+              if (item && item.department) {
+                const clean = item.department.trim();
+                if (!deletedDepts.some(dd => dd.toLowerCase() === clean.toLowerCase())) {
+                  recoveredDepts.add(clean);
+                }
+              }
             });
           }
           if (Array.isArray(parsed.equipment)) {
@@ -314,8 +356,10 @@ export function scanAndRecoverAllLocalStorage(): {
           }
           if (Array.isArray(parsed.technicians)) {
             parsed.technicians.forEach((item: any) => {
-              if (item && item.id && !recoveredTechs.some(tc => tc.id === item.id)) {
-                recoveredTechs.push(item);
+              if (item && item.id && !deletedTechIds.includes(item.id)) {
+                if (!recoveredTechs.some(tc => tc.id === item.id)) {
+                  recoveredTechs.push(item);
+                }
               }
             });
           }
@@ -425,14 +469,16 @@ export default function App() {
   });
 
   const [technicians, setTechnicians] = useState<Technician[]>(() => {
+    const deletedIds = getDeletedTechIds();
     const saved = localStorage.getItem('guaranesia_prod_technicians');
+    let list: Technician[] = DEFAULT_TECHNICIANS;
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) list = parsed;
       } catch (e) {}
     }
-    return DEFAULT_TECHNICIANS;
+    return list.filter(t => !deletedIds.includes(t.id));
   });
 
   const [equipment, setEquipment] = useState<Equipment[]>(() => {
@@ -441,8 +487,12 @@ export default function App() {
   });
 
   const [departments, setDepartments] = useState<string[]>(() => {
+    const deletedDepts = getDeletedDepartments();
     const saved = localStorage.getItem('guaranesia_prod_departments');
-    return saved ? sortDepartments(JSON.parse(saved)) : DEFAULT_DEPARTMENTS;
+    let list = saved ? JSON.parse(saved) : DEFAULT_DEPARTMENTS;
+    if (!Array.isArray(list) || list.length === 0) list = DEFAULT_DEPARTMENTS;
+    const filtered = list.filter((d: string) => !deletedDepts.some(dd => dd.toLowerCase() === d.toLowerCase()));
+    return sortDepartments(filtered);
   });
 
   useEffect(() => {
@@ -934,9 +984,17 @@ export default function App() {
   };
 
   const handleDeleteTechnician = async (techId: string) => {
-    setTechnicians(prev => prev.filter(t => t.id !== techId));
+    const deletedIds = getDeletedTechIds();
+    if (!deletedIds.includes(techId)) {
+      deletedIds.push(techId);
+      try {
+        localStorage.setItem('guaranesia_deleted_tech_ids', JSON.stringify(deletedIds));
+      } catch (e) {}
+    }
+    const updatedTechs = technicians.filter(t => t.id !== techId);
+    setTechnicians(updatedTechs);
     try {
-      localStorage.setItem('guaranesia_prod_technicians', JSON.stringify(technicians.filter(t => t.id !== techId)));
+      localStorage.setItem('guaranesia_prod_technicians', JSON.stringify(updatedTechs));
     } catch (e) {}
     try {
       await fetch(`/api/technicians/${techId}`, { method: 'DELETE' });
@@ -1054,6 +1112,13 @@ export default function App() {
   };
 
   const confirmDeleteDepartment = async (dept: string) => {
+    const deletedDepts = getDeletedDepartments();
+    if (!deletedDepts.includes(dept)) {
+      deletedDepts.push(dept);
+      try {
+        localStorage.setItem('guaranesia_deleted_departments', JSON.stringify(deletedDepts));
+      } catch (e) {}
+    }
     const updated = sortDepartments(departments.filter(d => d.toLowerCase() !== dept.toLowerCase()));
     setDepartments(updated);
     try {
