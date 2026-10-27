@@ -256,6 +256,15 @@ export function getDeletedDepartments(): string[] {
   }
 }
 
+export function getDeletedTicketIds(): string[] {
+  try {
+    const s = localStorage.getItem('guaranesia_deleted_ticket_ids');
+    return s ? JSON.parse(s) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
 export function scanAndRecoverAllLocalStorage(): {
   tickets: Ticket[];
   departments: string[];
@@ -273,6 +282,7 @@ export function scanAndRecoverAllLocalStorage(): {
 
   const deletedTechIds = getDeletedTechIds();
   const deletedDepts = getDeletedDepartments();
+  const deletedTicketIds = getDeletedTicketIds();
 
   try {
     for (let i = 0; i < localStorage.length; i++) {
@@ -298,8 +308,10 @@ export function scanAndRecoverAllLocalStorage(): {
             parsed.forEach((item: any) => {
               if (!item) return;
               if (item.id && (item.code || item.title || item.status)) {
-                if (!recoveredTickets.some(t => t.id === item.id)) {
-                  recoveredTickets.push(item);
+                if (!deletedTicketIds.includes(item.id)) {
+                  if (!recoveredTickets.some(t => t.id === item.id)) {
+                    recoveredTickets.push(item);
+                  }
                 }
                 if (item.department && typeof item.department === 'string') {
                   const clean = item.department.trim();
@@ -337,8 +349,10 @@ export function scanAndRecoverAllLocalStorage(): {
           }
           if (Array.isArray(parsed.tickets)) {
             parsed.tickets.forEach((item: any) => {
-              if (item && item.id && !recoveredTickets.some(t => t.id === item.id)) {
-                recoveredTickets.push(item);
+              if (item && item.id && !deletedTicketIds.includes(item.id)) {
+                if (!recoveredTickets.some(t => t.id === item.id)) {
+                  recoveredTickets.push(item);
+                }
               }
               if (item && item.department) {
                 const clean = item.department.trim();
@@ -465,8 +479,10 @@ export default function App() {
 
   // Production state (starts empty, ready for Supabase or local storage)
   const [tickets, setTickets] = useState<Ticket[]>(() => {
+    const deletedTicketIds = getDeletedTicketIds();
     const saved = localStorage.getItem('guaranesia_prod_tickets');
-    return saved ? JSON.parse(saved) : [];
+    let list: Ticket[] = saved ? JSON.parse(saved) : [];
+    return list.filter(t => !deletedTicketIds.includes(t.id));
   });
 
   const [technicians, setTechnicians] = useState<Technician[]>(() => {
@@ -1231,6 +1247,14 @@ export default function App() {
   };
 
   const confirmDeleteTicket = (ticketId: string, ticketCode: string) => {
+    const deletedTicketIds = getDeletedTicketIds();
+    if (!deletedTicketIds.includes(ticketId)) {
+      deletedTicketIds.push(ticketId);
+      try {
+        localStorage.setItem('guaranesia_deleted_ticket_ids', JSON.stringify(deletedTicketIds));
+      } catch (e) {}
+    }
+
     setTickets(prev => prev.filter(t => t.id !== ticketId));
     if (selectedTicket && selectedTicket.id === ticketId) {
       setSelectedTicket(null);
