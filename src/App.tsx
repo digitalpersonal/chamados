@@ -752,6 +752,8 @@ export default function App() {
   const [printStartDate, setPrintStartDate] = useState('');
   const [printEndDate, setPrintEndDate] = useState('');
   const [printSingleTicketId, setPrintSingleTicketId] = useState<string | null>(null);
+  const [selectedDailyTicketIds, setSelectedDailyTicketIds] = useState<string[]>([]);
+  const [onlyPrintSelectedDaily, setOnlyPrintSelectedDaily] = useState<boolean>(false);
 
   // Add Note Form states inside ticket details modal
   const [newNoteText, setNewNoteText] = useState('');
@@ -1480,6 +1482,9 @@ export default function App() {
   const printableTickets = tickets.filter(t => {
     if (printSingleTicketId) {
       return t.id === printSingleTicketId;
+    }
+    if (onlyPrintSelectedDaily && selectedDailyTicketIds.length > 0) {
+      return selectedDailyTicketIds.includes(t.id);
     }
     const matchesTech = printTechId === 'todos' || t.technicianId === printTechId;
     const matchesStatus = printStatus === 'todos' || t.status === printStatus;
@@ -3123,6 +3128,88 @@ export default function App() {
                     onChange={(e) => setPrintEndDate(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
                   />
+                </div>
+              </div>
+
+              {/* Daily Service Ticket Selection (Folha de Atendimentos do Dia) */}
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3 no-print">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="onlyDailyToggle"
+                      checked={onlyPrintSelectedDaily}
+                      onChange={(e) => setOnlyPrintSelectedDaily(e.target.checked)}
+                      className="w-4 h-4 rounded border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-950 cursor-pointer"
+                    />
+                    <label htmlFor="onlyDailyToggle" className="text-xs sm:text-sm font-bold text-white cursor-pointer">
+                      Folha de Atendimentos do Dia (Imprimir apenas os chamados selecionados abaixo)
+                    </label>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const allMatchingIds = tickets.filter(t => !t.archived).map(t => t.id);
+                        setSelectedDailyTicketIds(allMatchingIds);
+                        setOnlyPrintSelectedDaily(true);
+                      }}
+                      className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] font-semibold"
+                    >
+                      Selecionar Todos
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedDailyTicketIds([]);
+                        setOnlyPrintSelectedDaily(false);
+                      }}
+                      className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] font-semibold"
+                    >
+                      Limpar Seleção
+                    </button>
+                  </div>
+                </div>
+
+                {/* Ticket Checkboxes List for Selection */}
+                <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1 border border-slate-800 bg-slate-950 p-2.5 rounded-lg">
+                  {tickets.filter(t => !t.archived).map(t => {
+                    const isSelected = selectedDailyTicketIds.includes(t.id);
+                    return (
+                      <label 
+                        key={t.id} 
+                        className={`flex items-center justify-between p-2 rounded-lg border text-xs cursor-pointer transition-colors ${
+                          isSelected 
+                            ? 'bg-emerald-950/40 border-emerald-500/60 text-white' 
+                            : 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800/80'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedDailyTicketIds(prev => [...prev, t.id]);
+                                setOnlyPrintSelectedDaily(true);
+                              } else {
+                                setSelectedDailyTicketIds(prev => prev.filter(id => id !== t.id));
+                              }
+                            }}
+                            className="w-4 h-4 rounded border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-950 shrink-0 cursor-pointer"
+                          />
+                          <span className="font-mono font-bold text-emerald-400 shrink-0">[{t.code}]</span>
+                          <span className="font-medium truncate">{t.title}</span>
+                          <span className="text-[10px] text-slate-400 shrink-0">({t.department})</span>
+                        </div>
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold shrink-0 ${
+                          t.status === 'Resolvido' ? 'bg-emerald-900/60 text-emerald-300' : 'bg-amber-900/60 text-amber-300'
+                        }`}>
+                          {t.status}
+                        </span>
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
 
