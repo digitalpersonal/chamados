@@ -1643,6 +1643,7 @@ export default function App() {
           }
           persistTicketUpdate(updated);
         }}
+        onDeleteTicket={(ticketId, code) => handleDeleteTicket(ticketId, code)}
         onAddTechnician={(newTech) => {
           setTechnicians(prev => [...prev, newTech]);
           try {

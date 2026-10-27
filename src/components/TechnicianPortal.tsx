@@ -10,7 +10,7 @@ import {
   FileText, Send, Sparkles, RefreshCw, LogOut, ExternalLink, 
   Lock, Package, ShieldCheck, Check, Copy, X, Building2, 
   Printer, Monitor, Globe, Calendar, ChevronRight, ThumbsUp,
-  Tag, PhoneCall, AlertCircle, ChevronDown, CheckCircle, Key
+  Tag, PhoneCall, AlertCircle, ChevronDown, CheckCircle, Key, Trash2
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { 
@@ -24,6 +24,7 @@ interface TechnicianPortalProps {
   technicians: Technician[];
   tickets: Ticket[];
   onUpdateTicket: (updatedTicket: Ticket) => void;
+  onDeleteTicket?: (ticketId: string, code: string) => void;
   onAddTechnician?: (tech: Technician) => void;
   onSwitchToAdmin: () => void;
   onSwitchToPortalServidor: () => void;
@@ -35,6 +36,7 @@ export default function TechnicianPortal({
   technicians,
   tickets,
   onUpdateTicket,
+  onDeleteTicket,
   onAddTechnician,
   onSwitchToAdmin,
   onSwitchToPortalServidor,
@@ -1109,6 +1111,20 @@ export default function TechnicianPortal({
                       <FileText className="w-3.5 h-3.5" />
                       <span>Detalhes ({ticket.notes?.length || 0})</span>
                     </button>
+
+                    {onDeleteTicket && (
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`Deseja realmente apagar o chamado [${ticket.code}]?`)) {
+                            onDeleteTicket(ticket.id, ticket.code);
+                          }
+                        }}
+                        className="py-2.5 px-3 bg-rose-950/60 hover:bg-rose-900 text-rose-300 font-medium text-xs rounded-xl border border-rose-800/80 transition-colors flex items-center justify-center"
+                        title="Apagar este chamado permanentemente"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                      </button>
+                    )}
                   </div>
                 </div>
               );

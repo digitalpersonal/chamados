@@ -33,6 +33,15 @@ function getDeletedDepartments(): string[] {
   }
 }
 
+function getDeletedTicketIds(): string[] {
+  try {
+    const s = typeof window !== 'undefined' ? localStorage.getItem('guaranesia_deleted_ticket_ids') : null;
+    return s ? JSON.parse(s) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
 /**
  * Direct Supabase Cloud Database synchronization.
  * Connects directly from the browser to Supabase PostgreSQL,
@@ -203,10 +212,11 @@ export async function syncWithSupabase(localState: {
 
     const deletedTechIds = getDeletedTechIds();
     const deletedDepts = getDeletedDepartments();
+    const deletedTicketIds = getDeletedTicketIds();
 
     // 3. Bidirectional merge
     const mergedDeptsSet = new Set<string>([...cloudDepartments, ...localState.departments]);
-    const mergedDepartments = sortDepartments(Array.from(mergedDeptsSet)).filter(d => !deletedDepts.some(dd => dd.toLowerCase() === d.toLowerCase()));
+    const mergedDepartments = sortDepartments(Array.from(mergedDeptsSet)).filter(d => !deletedDepts.some((dd: string) => dd.toLowerCase() === d.toLowerCase()));
 
     const techMap = new Map<string, Technician>();
     cloudTechnicians.forEach(t => techMap.set(t.id, t));
@@ -232,9 +242,9 @@ export async function syncWithSupabase(localState: {
         }
       }
     });
-    const mergedTickets = Array.from(ticketMap.values()).sort((a, b) => 
-      new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-    );
+    const mergedTickets = Array.from(ticketMap.values())
+      .filter(t => !deletedTicketIds.includes(t.id))
+      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 
     // 4. Update cloud state mirror ONLY IF we have something to push or if we found existing data
     if (mergedTickets.length > 0 || cloudTickets.length > 0) {
