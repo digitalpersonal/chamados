@@ -26,12 +26,15 @@ html, body {
     print-color-adjust: exact !important;
   }
 
-  /* Hide UI chrome, navs, headers, footers, buttons, and modal overlays during print */
-  header, nav, button, footer, .no-print, div[class*="fixed"] {
-    display: none !important;
+  /* Hide everything on screen except printable-document */
+  body * {
+    visibility: hidden !important;
   }
 
-  /* Expand printable container to full page width with crisp typography on white paper */
+  .printable-document, .printable-document * {
+    visibility: visible !important;
+  }
+
   .printable-document {
     display: block !important;
     position: absolute !important;
@@ -45,13 +48,16 @@ html, body {
     color: #000000 !important;
     box-shadow: none !important;
     border: none !important;
-    z-index: 999999 !important;
   }
 
-  /* Ensure card blocks and table rows do not break awkwardly mid-row */
+  /* Each ticket sheet prints cleanly on its own page like GuaraFood order tickets */
   .printable-card, .printable-table-row {
     break-inside: avoid !important;
     page-break-inside: avoid !important;
+    page-break-after: always !important;
+    break-after: page !important;
+    margin-bottom: 20px !important;
+    background: #ffffff !important;
   }
 }
 
