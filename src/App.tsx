@@ -285,101 +285,50 @@ export function scanAndRecoverAllLocalStorage(): {
   const deletedTicketIds = getDeletedTicketIds();
 
   try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (!key) continue;
-      const val = localStorage.getItem(key);
-      if (!val) continue;
+    const tVal = localStorage.getItem('guaranesia_prod_tickets');
+    if (tVal) {
+      const parsed = JSON.parse(tVal);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((item: any) => {
+          if (item && item.id && !deletedTicketIds.includes(item.id)) {
+            recoveredTickets.push(item);
+          }
+        });
+      }
+    }
 
-      try {
-        const parsed = JSON.parse(val);
+    const dVal = localStorage.getItem('guaranesia_prod_departments');
+    if (dVal) {
+      const parsed = JSON.parse(dVal);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((d: string) => {
+          if (d && typeof d === 'string' && !deletedDepts.some(dd => dd.toLowerCase() === d.toLowerCase())) {
+            recoveredDepts.add(d);
+          }
+        });
+      }
+    }
 
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          if (typeof parsed[0] === 'string') {
-            parsed.forEach((d: string) => {
-              if (d && typeof d === 'string' && d.trim().length > 2) {
-                const clean = d.trim();
-                if (!deletedDepts.some(dd => dd.toLowerCase() === clean.toLowerCase())) {
-                  recoveredDepts.add(clean);
-                }
-              }
-            });
-          } else if (typeof parsed[0] === 'object') {
-            parsed.forEach((item: any) => {
-              if (!item) return;
-              if (item.id && (item.code || item.title || item.status)) {
-                if (!deletedTicketIds.includes(item.id)) {
-                  if (!recoveredTickets.some(t => t.id === item.id)) {
-                    recoveredTickets.push(item);
-                  }
-                }
-                if (item.department && typeof item.department === 'string') {
-                  const clean = item.department.trim();
-                  if (!deletedDepts.some(dd => dd.toLowerCase() === clean.toLowerCase())) {
-                    recoveredDepts.add(clean);
-                  }
-                }
-              } else if (item.id && item.name && item.type && item.department) {
-                if (!recoveredEq.some(eq => eq.id === item.id)) {
-                  recoveredEq.push(item);
-                }
-                const clean = item.department.trim();
-                if (!deletedDepts.some(dd => dd.toLowerCase() === clean.toLowerCase())) {
-                  recoveredDepts.add(clean);
-                }
-              } else if (item.id && item.name && (item.specialty || item.type)) {
-                if (!deletedTechIds.includes(item.id)) {
-                  if (!recoveredTechs.some(tech => tech.id === item.id)) {
-                    recoveredTechs.push(item);
-                  }
-                }
-              }
-            });
+    const eqVal = localStorage.getItem('guaranesia_prod_equipment');
+    if (eqVal) {
+      const parsed = JSON.parse(eqVal);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((eq: any) => {
+          if (eq && eq.id) recoveredEq.push(eq);
+        });
+      }
+    }
+
+    const techVal = localStorage.getItem('guaranesia_prod_technicians');
+    if (techVal) {
+      const parsed = JSON.parse(techVal);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((tech: any) => {
+          if (tech && tech.id && !deletedTechIds.includes(tech.id)) {
+            recoveredTechs.push(tech);
           }
-        } else if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          if (Array.isArray(parsed.departments)) {
-            parsed.departments.forEach((d: any) => {
-              if (typeof d === 'string' && d.trim()) {
-                const clean = d.trim();
-                if (!deletedDepts.some(dd => dd.toLowerCase() === clean.toLowerCase())) {
-                  recoveredDepts.add(clean);
-                }
-              }
-            });
-          }
-          if (Array.isArray(parsed.tickets)) {
-            parsed.tickets.forEach((item: any) => {
-              if (item && item.id && !deletedTicketIds.includes(item.id)) {
-                if (!recoveredTickets.some(t => t.id === item.id)) {
-                  recoveredTickets.push(item);
-                }
-              }
-              if (item && item.department) {
-                const clean = item.department.trim();
-                if (!deletedDepts.some(dd => dd.toLowerCase() === clean.toLowerCase())) {
-                  recoveredDepts.add(clean);
-                }
-              }
-            });
-          }
-          if (Array.isArray(parsed.equipment)) {
-            parsed.equipment.forEach((item: any) => {
-              if (item && item.id && !recoveredEq.some(eq => eq.id === item.id)) {
-                recoveredEq.push(item);
-              }
-            });
-          }
-          if (Array.isArray(parsed.technicians)) {
-            parsed.technicians.forEach((item: any) => {
-              if (item && item.id && !deletedTechIds.includes(item.id)) {
-                if (!recoveredTechs.some(tc => tc.id === item.id)) {
-                  recoveredTechs.push(item);
-                }
-              }
-            });
-          }
-        }
-      } catch (e) {}
+        });
+      }
     }
   } catch (e) {}
 

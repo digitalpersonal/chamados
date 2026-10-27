@@ -26,14 +26,17 @@ html, body {
     print-color-adjust: exact !important;
   }
 
-  /* Hide UI chrome during print */
-  header, nav, button, footer, .no-print {
+  /* Hide UI chrome, navs, headers, footers, buttons, and modal overlays during print */
+  header, nav, button, footer, .no-print, div[class*="fixed"] {
     display: none !important;
   }
 
-  /* Expand printable container to full page width with crisp typography */
+  /* Expand printable container to full page width with crisp typography on white paper */
   .printable-document {
     display: block !important;
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
     width: 100% !important;
     max-width: 100% !important;
     margin: 0 !important;
@@ -42,6 +45,7 @@ html, body {
     color: #000000 !important;
     box-shadow: none !important;
     border: none !important;
+    z-index: 999999 !important;
   }
 
   /* Ensure card blocks and table rows do not break awkwardly mid-row */
