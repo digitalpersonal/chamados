@@ -9,7 +9,7 @@ import {
   CheckCircle2, Send, Search, ArrowLeft, ShieldCheck, 
   HelpCircle, Building2, User, PhoneCall, AlertCircle, Copy, Check
 } from 'lucide-react';
-import { EquipmentType, Priority, Ticket, TicketStatus, calculateDefaultDeadline, formatSlaDate, getSlaStatus } from '../App';
+import { EquipmentType, Priority, Ticket, TicketStatus, calculateDefaultDeadline, formatSlaDate, getSlaStatus, generateUniqueTicketCode } from '../App';
 import { saveTicketToSupabase } from '../lib/cloudDbService';
 import { fetchAndApplyServerCredentials } from '../lib/supabase';
 
@@ -172,7 +172,7 @@ export default function PortalServidor({
       // If backend API is not running (e.g. static Vite hosting on Vercel), construct ticket directly
       if (!createdTicket) {
         const now = new Date().toISOString();
-        const code = `CH-2026-${String(tickets.length + 1).padStart(3, '0')}`;
+        const code = generateUniqueTicketCode(tickets);
         createdTicket = {
           id: `t-pub-${Date.now()}`,
           code,

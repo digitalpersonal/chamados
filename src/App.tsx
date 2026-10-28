@@ -164,6 +164,59 @@ export const calculateDefaultDeadline = (priority: Priority, fromDate: Date = ne
   return date.toISOString();
 };
 
+export const generateUniqueTicketCode = (existingTickets: Ticket[]): string => {
+  const currentYear = new Date().getFullYear();
+  let seq = existingTickets.length + 1;
+  existingTickets.forEach(t => {
+    if (t && t.code) {
+      const parts = t.code.split('-');
+      const num = parseInt(parts[parts.length - 1], 10);
+      if (!isNaN(num) && num >= seq) {
+        seq = num + 1;
+      }
+    }
+  });
+
+  let code = `CH-${currentYear}-${String(seq).padStart(3, '0')}`;
+  while (existingTickets.some(t => t.code === code)) {
+    seq++;
+    code = `CH-${currentYear}-${String(seq).padStart(3, '0')}`;
+  }
+  return code;
+};
+
+export const normalizeTicketCodes = (tickets: Ticket[]): Ticket[] => {
+  const currentYear = new Date().getFullYear();
+  const seenCodes = new Set<string>();
+  let nextSeq = 1;
+
+  return tickets.map((t, idx) => {
+    if (!t || !t.code) {
+      const code = `CH-${currentYear}-${String(idx + 1).padStart(3, '0')}`;
+      seenCodes.add(code);
+      return { ...t, code };
+    }
+
+    if (seenCodes.has(t.code)) {
+      while (seenCodes.has(`CH-${currentYear}-${String(nextSeq).padStart(3, '0')}`)) {
+        nextSeq++;
+      }
+      const uniqueCode = `CH-${currentYear}-${String(nextSeq).padStart(3, '0')}`;
+      seenCodes.add(uniqueCode);
+      nextSeq++;
+      return { ...t, code: uniqueCode };
+    } else {
+      seenCodes.add(t.code);
+      const match = t.code.match(/CH-\d+-(\d+)/i);
+      if (match && match[1]) {
+        const num = parseInt(match[1], 10);
+        if (num >= nextSeq) nextSeq = num + 1;
+      }
+      return t;
+    }
+  });
+};
+
 export const formatSlaDate = (deadlineStr?: string): string => {
   if (!deadlineStr) return 'Não informada';
   try {
@@ -431,7 +484,8 @@ export default function App() {
     const deletedTicketIds = getDeletedTicketIds();
     const saved = localStorage.getItem('guaranesia_prod_tickets');
     let list: Ticket[] = saved ? JSON.parse(saved) : [];
-    return list.filter(t => !deletedTicketIds.includes(t.id));
+    const filtered = list.filter(t => !deletedTicketIds.includes(t.id));
+    return normalizeTicketCodes(filtered);
   });
 
   const [technicians, setTechnicians] = useState<Technician[]>(() => {
@@ -542,8 +596,9 @@ export default function App() {
           if (cloudResult && cloudResult.success) {
             setIsServerSynced(true);
             if (Array.isArray(cloudResult.tickets)) {
-              setTickets(cloudResult.tickets);
-              try { localStorage.setItem('guaranesia_prod_tickets', JSON.stringify(cloudResult.tickets)); } catch (e) {}
+              const normalized = normalizeTicketCodes(cloudResult.tickets);
+              setTickets(normalized);
+              try { localStorage.setItem('guaranesia_prod_tickets', JSON.stringify(normalized)); } catch (e) {}
             }
             if (Array.isArray(cloudResult.departments) && cloudResult.departments.length > 0) {
               setDepartments(sortDepartments(cloudResult.departments));
@@ -591,9 +646,10 @@ export default function App() {
           if (data.success) {
             setIsServerSynced(true);
             if (Array.isArray(data.tickets)) {
-              setTickets(data.tickets);
+              const normalized = normalizeTicketCodes(data.tickets);
+              setTickets(normalized);
               try {
-                localStorage.setItem('guaranesia_prod_tickets', JSON.stringify(data.tickets));
+                localStorage.setItem('guaranesia_prod_tickets', JSON.stringify(normalized));
               } catch (e) {}
             }
             if (Array.isArray(data.technicians)) {
@@ -845,7 +901,7 @@ export default function App() {
       setIsAiAnalyzing(false);
     }
 
-    const code = `CH-2026-${String(tickets.length + 1).padStart(3, '0')}`;
+    const code = generateUniqueTicketCode(tickets);
     const now = new Date().toISOString();
 
     const newTicketObj: Ticket = {
