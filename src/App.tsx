@@ -13,7 +13,7 @@ import {
   Globe, Volume2, VolumeX, Bell, BellRing, Link2, ExternalLink, Copy, Check, LogOut,
   FileSpreadsheet, Package, Tag, Cpu, Wifi, Network, Cable, X, Cloud
 } from 'lucide-react';
-import { supabase, isSupabaseReady, fetchAndApplyServerCredentials } from './lib/supabase';
+import { supabase, isSupabaseReady, fetchAndApplyServerCredentials, getSupabaseClient } from './lib/supabase';
 import { 
   syncWithSupabase, 
   saveTicketToSupabase, 
@@ -685,14 +685,14 @@ export default function App() {
     }
   };
 
-  // Synchronize on application mount, after login, and periodically
+  // Synchronize on application mount, after login, and in real-time across all platforms (cell phones and PCs)
   useEffect(() => {
     syncWithServer(false);
 
-    // Setup auto-polling every 60 seconds
+    // Setup auto-polling every 10 seconds for robust multi-platform sync
     const interval = setInterval(() => {
       syncWithServer(false);
-    }, 60000);
+    }, 10000);
 
     // Also sync when window regains focus (user switches back to tab)
     const handleFocus = () => {
@@ -700,9 +700,31 @@ export default function App() {
     };
     window.addEventListener('focus', handleFocus);
 
+    // Setup Supabase Realtime channel subscription for instant WebSocket updates across devices
+    let channel: any = null;
+    try {
+      const client = getSupabaseClient();
+      if (client && isSupabaseReady()) {
+        channel = client
+          .channel('public_guaranesia_realtime_sync')
+          .on('postgres_changes', { event: '*', schema: 'public' }, () => {
+            syncWithServer(false);
+          })
+          .subscribe();
+      }
+    } catch (e) {
+      console.warn('Realtime subscription notice:', e);
+    }
+
     return () => {
       clearInterval(interval);
       window.removeEventListener('focus', handleFocus);
+      if (channel) {
+        try {
+          const client = getSupabaseClient();
+          if (client) client.removeChannel(channel);
+        } catch (e) {}
+      }
     };
   }, [isAuthenticated]);
 
