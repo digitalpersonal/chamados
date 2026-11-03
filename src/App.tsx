@@ -1394,7 +1394,10 @@ export default function App() {
   };
 
   const handleAddNoteToTicket = (ticketId: string) => {
-    if (!newNoteText.trim()) return;
+    if (!newNoteText.trim()) {
+      alert('Por favor, digite o texto da anotação.');
+      return;
+    }
     const now = new Date().toISOString();
     const newNote: TicketNote = {
       id: `n-${Date.now()}`,
@@ -1419,6 +1422,8 @@ export default function App() {
       return t;
     }));
     setNewNoteText('');
+    setDeleteToast('Anotação adicionada com sucesso!');
+    setTimeout(() => setDeleteToast(null), 3000);
   };
 
   const COMMON_PARTS_PRESETS = [

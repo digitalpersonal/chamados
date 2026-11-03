@@ -333,7 +333,10 @@ export default function TechnicianPortal({
 
   // Add intermediate note
   const handleAddQuickNote = (ticket: Ticket) => {
-    if (!noteText.trim()) return;
+    if (!noteText.trim()) {
+      alert('Por favor, digite o texto do apontamento técnico.');
+      return;
+    }
     const now = new Date().toISOString();
     const techName = activeTechnician ? activeTechnician.name : 'Técnico Interno';
 
