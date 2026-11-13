@@ -10,7 +10,7 @@ import {
   FileText, Send, Sparkles, RefreshCw, LogOut, ExternalLink, 
   Lock, Package, ShieldCheck, Check, Copy, X, Building2, 
   Printer, Monitor, Globe, Calendar, ChevronRight, ThumbsUp,
-  Tag, PhoneCall, AlertCircle, ChevronDown, CheckCircle, Key, Trash2
+  Tag, PhoneCall, AlertCircle, ChevronDown, CheckCircle, Key, Trash2, BellRing
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { 
@@ -19,6 +19,14 @@ import {
 } from '../App';
 import { isSupabaseReady } from '../lib/supabase';
 import { playTicketAlertSound, initAudioContext } from '../lib/audioNotifier';
+import PushNotificationModal from './PushNotificationModal';
+import {
+  getExistingPushSubscription,
+  registerPushServiceWorker,
+  syncPushSubscriptionMetadata,
+  getNotificationPermissionState,
+  subscribeToWebPush
+} from '../lib/pushNotificationService';
 
 interface TechnicianPortalProps {
   technicians: Technician[];
@@ -142,6 +150,10 @@ export default function TechnicianPortal({
   // New Note state inside details view
   const [noteText, setNoteText] = useState('');
 
+  // Web Push (Service Worker) background notifications state
+  const [isPushModalOpen, setIsPushModalOpen] = useState(false);
+  const [isPushSubscribed, setIsPushSubscribed] = useState(false);
+
   // Toast message
   const [actionToast, setActionToast] = useState<{ title: string; message: string; type: 'success' | 'info' } | null>(null);
 
@@ -149,6 +161,60 @@ export default function TechnicianPortal({
     setActionToast({ title, message, type });
     setTimeout(() => setActionToast(null), 4000);
   };
+
+  // Register Service Worker & sync technician push subscription metadata
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      await registerPushServiceWorker();
+      const sub = await getExistingPushSubscription();
+      const active = Boolean(sub) && getNotificationPermissionState() === 'granted';
+      if (mounted) setIsPushSubscribed(active);
+      if (active && activeTechnician) {
+        await syncPushSubscriptionMetadata({
+          role: 'technician',
+          technicianId: activeTechnician.id,
+          technicianName: activeTechnician.name
+        });
+      }
+    })();
+    return () => { mounted = false; };
+  }, [activeTechnician?.id]);
+
+  // Listen for Service Worker click / push messages while open
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+    const handleSwMessage = (event: MessageEvent) => {
+      const msg = event.data;
+      if (!msg) return;
+      if (msg.type === 'OPEN_TICKET' && (msg.ticketId || msg.code)) {
+        const found = tickets.find(t => t.id === msg.ticketId || t.code === msg.code);
+        if (found) {
+          setViewingTicket(found);
+          if (!found.technicianId) setTab('disponiveis');
+        }
+      } else if (msg.type === 'PUSH_RECEIVED') {
+        playTicketAlertSound();
+        if (onForceSync) onForceSync();
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', handleSwMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+  }, [tickets]);
+
+  // Open ticket automatically if launched from a background notification (?codigo=...)
+  useEffect(() => {
+    if (typeof window === 'undefined' || tickets.length === 0) return;
+    const params = new URLSearchParams(window.location.search);
+    const codeParam = params.get('codigo') || params.get('ticket');
+    if (codeParam && !viewingTicket) {
+      const found = tickets.find(t => t.code === codeParam || t.id === codeParam);
+      if (found) {
+        setViewingTicket(found);
+        if (!found.technicianId) setTab('disponiveis');
+      }
+    }
+  }, [tickets.length]);
 
   // Keep viewing ticket synced when tickets list updates
   useEffect(() => {
@@ -772,6 +838,19 @@ export default function TechnicianPortal({
 
         {/* Header Actions */}
         <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto justify-start sm:justify-end">
+          <button
+            onClick={() => setIsPushModalOpen(true)}
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold border flex items-center gap-1.5 transition-colors cursor-pointer ${
+              isPushSubscribed
+                ? 'bg-emerald-950/70 border-emerald-500/60 text-emerald-300 hover:bg-emerald-900/70'
+                : 'bg-amber-950/60 border-amber-500/60 text-amber-300 hover:bg-amber-900/60 animate-pulse'
+            }`}
+            title="Configurar notificações push em segundo plano (funciona com a aba fechada)"
+          >
+            <BellRing className={`w-3.5 h-3.5 ${isPushSubscribed ? 'text-emerald-400' : 'text-amber-400'}`} />
+            <span>{isPushSubscribed ? 'Push Ativo' : 'Ativar Alertas Push'}</span>
+          </button>
+
           {onForceSync && (
             <button
               onClick={onForceSync}
@@ -815,6 +894,50 @@ export default function TechnicianPortal({
 
       {/* Main Body */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6 space-y-4 sm:space-y-6">
+        {/* Background Push Notification Quick Activation Banner */}
+        {!isPushSubscribed && (
+          <div className="bg-gradient-to-r from-amber-950/60 via-slate-950 to-slate-950 border border-amber-500/40 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md">
+            <div className="flex items-start sm:items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
+                <BellRing className="w-5 h-5" />
+              </div>
+              <div className="text-xs">
+                <strong className="text-amber-300 block sm:inline">Receba alertas instantâneos mesmo com a aba fechada!</strong>{' '}
+                <span className="text-slate-300">
+                  Ative as notificações Push via Service Worker para ser avisado assim que um novo chamado ou agendamento for criado.
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={async () => {
+                  const res = await subscribeToWebPush({
+                    role: 'technician',
+                    technicianId: activeTechnician.id,
+                    technicianName: activeTechnician.name
+                  });
+                  if (res.success) {
+                    setIsPushSubscribed(true);
+                    showToast('Push Ativado!', 'Você receberá notificações instantâneas mesmo com a aba fechada.');
+                  } else {
+                    setIsPushModalOpen(true);
+                  }
+                }}
+                className="flex-1 sm:flex-initial px-3.5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl transition-colors cursor-pointer whitespace-nowrap"
+              >
+                Ativar Agora
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsPushModalOpen(true)}
+                className="px-3 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-medium rounded-xl transition-colors whitespace-nowrap"
+              >
+                Configurar / Testar
+              </button>
+            </div>
+          </div>
+        )}
         {/* KPI Summary Cards */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-4">
           <div className="bg-slate-950 border border-slate-800 rounded-2xl p-3.5 sm:p-4 shadow-sm flex items-center gap-3">
@@ -1550,6 +1673,16 @@ export default function TechnicianPortal({
           </div>
         </div>
       )}
+
+      {/* Modal de Configuração de Notificações Push (Service Worker) */}
+      <PushNotificationModal
+        isOpen={isPushModalOpen}
+        onClose={() => setIsPushModalOpen(false)}
+        role="technician"
+        technicianId={activeTechnician.id}
+        technicianName={activeTechnician.name}
+        onStatusChange={(sub) => setIsPushSubscribed(sub)}
+      />
 
       {/* Footer */}
       <footer className="bg-slate-950 border-t border-slate-800 py-3 px-6 text-center text-xs text-slate-500 no-print mt-auto">

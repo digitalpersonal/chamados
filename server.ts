@@ -5,6 +5,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
+import * as webpush from 'web-push';
 
 dotenv.config();
 
@@ -26,6 +27,146 @@ const TICKETS_FILE = path.join(DATA_DIR, 'tickets.json');
 const EQUIPMENT_FILE = path.join(DATA_DIR, 'equipment.json');
 const TECHNICIANS_FILE = path.join(DATA_DIR, 'technicians.json');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
+const VAPID_FILE = path.join(DATA_DIR, 'vapid.json');
+const PUSH_SUBSCRIPTIONS_FILE = path.join(DATA_DIR, 'push-subscriptions.json');
+
+interface StoredPushSubscription {
+  id: string;
+  endpoint: string;
+  expirationTime?: number | null;
+  keys: {
+    p256dh: string;
+    auth: string;
+  };
+  role: 'admin' | 'technician';
+  technicianId?: string | null;
+  technicianName?: string | null;
+  deviceLabel?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function getOrCreateVapidKeys(): { publicKey: string; privateKey: string } {
+  const envPublic = (process.env.VAPID_PUBLIC_KEY || '').trim();
+  const envPrivate = (process.env.VAPID_PRIVATE_KEY || '').trim();
+  if (envPublic && envPrivate) {
+    return { publicKey: envPublic, privateKey: envPrivate };
+  }
+
+  try {
+    if (fs.existsSync(VAPID_FILE)) {
+      const content = fs.readFileSync(VAPID_FILE, 'utf-8');
+      const parsed = JSON.parse(content);
+      if (parsed && parsed.publicKey && parsed.privateKey) {
+        return parsed;
+      }
+    }
+  } catch (e) {}
+
+  const generated = webpush.generateVAPIDKeys();
+  try {
+    fs.writeFileSync(VAPID_FILE, JSON.stringify(generated, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Could not persist vapid.json:', e);
+  }
+  return generated;
+}
+
+const vapidKeys = getOrCreateVapidKeys();
+webpush.setVapidDetails(
+  'mailto:ti@guaranesia.mg.gov.br',
+  vapidKeys.publicKey,
+  vapidKeys.privateKey
+);
+
+function getStoredPushSubscriptions(): StoredPushSubscription[] {
+  try {
+    if (fs.existsSync(PUSH_SUBSCRIPTIONS_FILE)) {
+      const content = fs.readFileSync(PUSH_SUBSCRIPTIONS_FILE, 'utf-8');
+      const parsed = JSON.parse(content);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {
+    console.warn('Error reading push-subscriptions.json:', e);
+  }
+  return [];
+}
+
+function saveStoredPushSubscriptions(subs: StoredPushSubscription[]) {
+  try {
+    fs.writeFileSync(PUSH_SUBSCRIPTIONS_FILE, JSON.stringify(subs, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('Error saving push-subscriptions.json:', e);
+  }
+}
+
+async function sendPushToProfessionals(
+  payload: {
+    title: string;
+    body: string;
+    tag?: string;
+    url?: string;
+    ticketId?: string;
+    code?: string;
+    department?: string;
+    priority?: string;
+  },
+  options?: {
+    targetTechnicianId?: string;
+    onlyEndpoint?: string;
+  }
+): Promise<{ sentCount: number; failedCount: number }> {
+  let subs = getStoredPushSubscriptions();
+  if (subs.length === 0) return { sentCount: 0, failedCount: 0 };
+
+  let targets = subs;
+  if (options?.onlyEndpoint) {
+    targets = subs.filter(s => s.endpoint === options.onlyEndpoint);
+  } else if (options?.targetTechnicianId) {
+    targets = subs.filter(
+      s => s.role === 'admin' || (s.role === 'technician' && (!s.technicianId || s.technicianId === options.targetTechnicianId))
+    );
+  }
+
+  let sentCount = 0;
+  let failedCount = 0;
+  const expiredEndpoints = new Set<string>();
+  const jsonPayload = JSON.stringify({
+    ...payload,
+    timestamp: Date.now()
+  });
+
+  await Promise.all(
+    targets.map(async (sub) => {
+      try {
+        await webpush.sendNotification(
+          {
+            endpoint: sub.endpoint,
+            expirationTime: sub.expirationTime ?? null,
+            keys: sub.keys
+          },
+          jsonPayload,
+          { TTL: 60 * 60 * 24 } // Persist push message for 24h in push service if device is offline
+        );
+        sentCount++;
+      } catch (err: any) {
+        failedCount++;
+        if (err?.statusCode === 410 || err?.statusCode === 404) {
+          expiredEndpoints.add(sub.endpoint);
+        } else {
+          console.warn('Web Push send error:', err?.statusCode || err?.message);
+        }
+      }
+    })
+  );
+
+  if (expiredEndpoints.size > 0) {
+    const cleaned = subs.filter(s => !expiredEndpoints.has(s.endpoint));
+    saveStoredPushSubscriptions(cleaned);
+  }
+
+  return { sentCount, failedCount };
+}
 
 function getStoredConfig(): { supabaseUrl?: string; supabaseAnonKey?: string } {
   try {
@@ -238,6 +379,136 @@ async function startServer() {
   });
 
   // ==========================================
+  // WEB PUSH & SERVICE WORKER API (VAPID)
+  // ==========================================
+
+  app.get('/api/push/vapid-public-key', (req, res) => {
+    res.json({
+      success: true,
+      publicKey: vapidKeys.publicKey
+    });
+  });
+
+  app.get('/api/push/status', (req, res) => {
+    const subs = getStoredPushSubscriptions();
+    res.json({
+      success: true,
+      configured: Boolean(vapidKeys.publicKey && vapidKeys.privateKey),
+      totalSubscriptions: subs.length,
+      adminCount: subs.filter(s => s.role === 'admin').length,
+      technicianCount: subs.filter(s => s.role === 'technician').length,
+      endpoints: subs.map(s => s.endpoint)
+    });
+  });
+
+  app.post('/api/push/subscribe', (req, res) => {
+    try {
+      const { subscription, role, technicianId, technicianName, deviceLabel } = req.body;
+      if (!subscription || !subscription.endpoint || !subscription.keys?.p256dh || !subscription.keys?.auth) {
+        return res.status(400).json({ success: false, error: 'Inscrição Push inválida.' });
+      }
+
+      const subs = getStoredPushSubscriptions();
+      const now = new Date().toISOString();
+      const normalizedRole: 'admin' | 'technician' = role === 'admin' ? 'admin' : 'technician';
+
+      const existingIdx = subs.findIndex(s => s.endpoint === subscription.endpoint);
+      const record: StoredPushSubscription = {
+        id: existingIdx >= 0 ? subs[existingIdx].id : `push-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        endpoint: subscription.endpoint,
+        expirationTime: subscription.expirationTime ?? null,
+        keys: {
+          p256dh: subscription.keys.p256dh,
+          auth: subscription.keys.auth
+        },
+        role: normalizedRole,
+        technicianId: technicianId || null,
+        technicianName: technicianName || null,
+        deviceLabel: deviceLabel || 'Navegador',
+        createdAt: existingIdx >= 0 ? subs[existingIdx].createdAt : now,
+        updatedAt: now
+      };
+
+      if (existingIdx >= 0) {
+        subs[existingIdx] = record;
+      } else {
+        subs.push(record);
+      }
+
+      saveStoredPushSubscriptions(subs);
+      res.json({
+        success: true,
+        totalSubscriptions: subs.length,
+        message: 'Dispositivo inscrito para alertas Push em segundo plano.'
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/push/unsubscribe', (req, res) => {
+    try {
+      const { endpoint } = req.body;
+      if (!endpoint) {
+        return res.status(400).json({ success: false, error: 'Endpoint obrigatório.' });
+      }
+      const subs = getStoredPushSubscriptions().filter(s => s.endpoint !== endpoint);
+      saveStoredPushSubscriptions(subs);
+      res.json({ success: true, totalSubscriptions: subs.length });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/push/test', async (req, res) => {
+    try {
+      const { endpoint, delaySeconds, role, technicianId } = req.body || {};
+      const delayMs = Math.min(Math.max(Number(delaySeconds) || 0, 0), 15) * 1000;
+
+      const testPayload = {
+        title: '🔔 Teste de Notificação em Segundo Plano',
+        body: delayMs > 0
+          ? 'Alerta entregue pelo Service Worker com a aba fechada! Clique para abrir o painel.'
+          : 'Notificações Push configuradas com sucesso! Novos agendamentos e chamados aparecerão instantaneamente.',
+        tag: `test-push-${Date.now()}`,
+        url: role === 'admin' ? '/' : '/?portal=tecnico'
+      };
+
+      if (delayMs > 0) {
+        setTimeout(() => {
+          sendPushToProfessionals(testPayload, {
+            onlyEndpoint: endpoint || undefined,
+            targetTechnicianId: technicianId || undefined
+          }).catch(() => {});
+        }, delayMs);
+
+        return res.json({
+          success: true,
+          scheduled: true,
+          delaySeconds: delayMs / 1000,
+          message: `Alerta agendado para daqui a ${delayMs / 1000} segundos. Você já pode fechar esta aba!`
+        });
+      }
+
+      const result = await sendPushToProfessionals(testPayload, {
+        onlyEndpoint: endpoint || undefined,
+        targetTechnicianId: technicianId || undefined
+      });
+
+      res.json({
+        success: result.sentCount > 0,
+        sentCount: result.sentCount,
+        failedCount: result.failedCount,
+        message: result.sentCount > 0
+          ? `Notificação de teste enviada para ${result.sentCount} dispositivo(s).`
+          : 'Nenhum dispositivo inscrito encontrado para envio.'
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ==========================================
   // SYSTEM STATE & BIDIRECTIONAL SYNC API
   // ==========================================
 
@@ -395,6 +666,7 @@ async function startServer() {
 
       const tickets = getStoredTickets();
       const existingIdx = tickets.findIndex(t => t.id === ticket.id);
+      const isBrandNew = existingIdx < 0;
       if (existingIdx >= 0) {
         tickets[existingIdx] = ticket;
       } else {
@@ -408,6 +680,22 @@ async function startServer() {
         timestamp: new Date().toISOString()
       });
 
+      if (isBrandNew) {
+        sendPushToProfessionals(
+          {
+            title: `🚨 Novo Chamado/Agendamento: ${ticket.code}`,
+            body: `${ticket.title} • Setor: ${ticket.department} (${ticket.priority || 'Média'})`,
+            tag: `ticket-${ticket.id}`,
+            url: `/?portal=tecnico&codigo=${encodeURIComponent(ticket.code)}`,
+            ticketId: ticket.id,
+            code: ticket.code,
+            department: ticket.department,
+            priority: ticket.priority
+          },
+          { targetTechnicianId: ticket.technicianId || undefined }
+        ).catch(() => {});
+      }
+
       res.json({ success: true, ticket });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -420,6 +708,7 @@ async function startServer() {
       const updatedTicket = req.body;
       const tickets = getStoredTickets();
       const index = tickets.findIndex(t => t.id === id);
+      const prevTechnicianId = index >= 0 ? tickets[index].technicianId : undefined;
 
       if (index === -1) {
         // If not found, add it
@@ -429,13 +718,31 @@ async function startServer() {
       }
       saveStoredTickets(tickets);
 
+      const savedTicket = tickets[index >= 0 ? index : 0];
       broadcastTicketEvent({
         type: 'UPDATE_TICKET',
-        ticket: tickets[index >= 0 ? index : 0],
+        ticket: savedTicket,
         timestamp: new Date().toISOString()
       });
 
-      res.json({ success: true, ticket: tickets[index >= 0 ? index : 0] });
+      // Notify technician instantly when assigned a ticket
+      if (savedTicket?.technicianId && savedTicket.technicianId !== prevTechnicianId) {
+        sendPushToProfessionals(
+          {
+            title: `📌 Atendimento Atribuído: ${savedTicket.code}`,
+            body: `${savedTicket.title} • Setor: ${savedTicket.department}`,
+            tag: `assign-${savedTicket.id}`,
+            url: `/?portal=tecnico&codigo=${encodeURIComponent(savedTicket.code)}`,
+            ticketId: savedTicket.id,
+            code: savedTicket.code,
+            department: savedTicket.department,
+            priority: savedTicket.priority
+          },
+          { targetTechnicianId: savedTicket.technicianId }
+        ).catch(() => {});
+      }
+
+      res.json({ success: true, ticket: savedTicket });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -510,6 +817,18 @@ async function startServer() {
         ticket: newTicket,
         timestamp: now
       });
+
+      // Dispatch persistent Web Push notifications to professionals (even with closed tabs)
+      sendPushToProfessionals({
+        title: `🚨 Novo Agendamento/Chamado: ${newTicket.code}`,
+        body: `${newTicket.title} • Setor: ${newTicket.department}${newTicket.requesterName ? ` (${newTicket.requesterName})` : ''}`,
+        tag: `ticket-${newTicket.id}`,
+        url: `/?portal=tecnico&codigo=${encodeURIComponent(newTicket.code)}`,
+        ticketId: newTicket.id,
+        code: newTicket.code,
+        department: newTicket.department,
+        priority: newTicket.priority
+      }).catch(() => {});
 
       res.json({ success: true, ticket: newTicket });
     } catch (error: any) {
@@ -682,6 +1001,22 @@ async function startServer() {
           ticket,
           timestamp: new Date().toISOString()
         });
+
+        if (!eventType || eventType === 'NEW_TICKET') {
+          sendPushToProfessionals(
+            {
+              title: `🚨 Novo Chamado: ${ticket.code}`,
+              body: `${ticket.title} • Setor: ${ticket.department}`,
+              tag: `ticket-${ticket.id}`,
+              url: `/?portal=tecnico&codigo=${encodeURIComponent(ticket.code)}`,
+              ticketId: ticket.id,
+              code: ticket.code,
+              department: ticket.department,
+              priority: ticket.priority
+            },
+            { targetTechnicianId: ticket.technicianId || undefined }
+          ).catch(() => {});
+        }
       }
       res.json({ success: true });
     } catch (error: any) {
@@ -748,6 +1083,12 @@ Por favor, forneça em formato JSON estrito (sem blocos markdown adicionais, ape
       console.error('Gemini API Error:', error);
       res.status(500).json({ success: false, error: error.message || 'Erro ao consultar IA' });
     }
+  });
+
+  app.use('/sw.js', (req, res, next) => {
+    res.setHeader('Service-Worker-Allowed', '/');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    next();
   });
 
   if (isProduction) {

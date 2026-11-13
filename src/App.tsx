@@ -29,8 +29,16 @@ import DashboardCharts from './components/DashboardCharts';
 import BackupModal from './components/BackupModal';
 import CloudSyncModal from './components/CloudSyncModal';
 import TechnicianPortal from './components/TechnicianPortal';
+import PushNotificationModal from './components/PushNotificationModal';
 import { checkAndRunDailyScheduledBackup } from './lib/backupService';
 import { initAudioContext, playTicketAlertSound, getSoundEnabled, setSoundEnabled } from './lib/audioNotifier';
+import {
+  registerPushServiceWorker,
+  getExistingPushSubscription,
+  syncPushSubscriptionMetadata,
+  showPersistentSwNotification,
+  getNotificationPermissionState
+} from './lib/pushNotificationService';
 
 // Types
 export type EquipmentType = 'Impressora' | 'Troca de Toner' | 'Relógio de Ponto' | 'Telefone IP' | 'Computador' | 'Atualização do Site' | 'Outros';
@@ -430,39 +438,21 @@ export default function App() {
     return 'default';
   });
 
+  const [isPushModalOpen, setIsPushModalOpen] = useState(false);
+  const [isPushSubscribed, setIsPushSubscribed] = useState(false);
+
   const requestNotificationPermission = async () => {
-    if (typeof window !== 'undefined' && 'Notification' in window) {
-      const res = await Notification.requestPermission();
-      setNotifPermission(res);
-      if (res === 'granted') {
-        new Notification('Notificações Nativas Ativadas!', {
-          body: 'O administrador receberá alertas do sistema quando novos chamados chegarem, mesmo em segundo plano.',
-          icon: '/favicon.ico'
-        });
-      } else {
-        alert('Permissão de notificação negada pelo navegador.');
-      }
-    } else {
-      alert('Seu navegador não suporta notificações nativas.');
-    }
+    setIsPushModalOpen(true);
   };
 
   const showDesktopNotification = (ticket: Ticket) => {
-    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-      try {
-        const notif = new Notification(`🚨 Novo Chamado: ${ticket.code}`, {
-          body: `${ticket.title}\nSetor: ${ticket.department} (${ticket.equipmentType})`,
-          icon: '/favicon.ico'
-        });
-        notif.onclick = () => {
-          window.focus();
-          setSelectedTicket(ticket);
-          notif.close();
-        };
-      } catch (e) {
-        console.warn('Desktop notification error:', e);
-      }
-    }
+    showPersistentSwNotification({
+      title: `🚨 Novo Chamado: ${ticket.code}`,
+      body: `${ticket.title} • Setor: ${ticket.department} (${ticket.equipmentType})`,
+      ticketId: ticket.id,
+      code: ticket.code,
+      url: `/?codigo=${encodeURIComponent(ticket.code)}`
+    });
   };
 
   const [liveAlert, setLiveAlert] = useState<{
@@ -785,6 +775,61 @@ export default function App() {
       if (eventSource) eventSource.close();
     };
   }, []);
+
+  // Register Service Worker (/sw.js) and keep Push Subscription synced
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      await registerPushServiceWorker();
+      const sub = await getExistingPushSubscription();
+      const perm = getNotificationPermissionState();
+      if (mounted) {
+        if (perm !== 'unsupported') setNotifPermission(perm);
+        setIsPushSubscribed(Boolean(sub) && perm === 'granted');
+      }
+      if (sub && isAuthenticated && viewMode === 'admin') {
+        await syncPushSubscriptionMetadata({ role: 'admin' });
+      }
+    })();
+    return () => { mounted = false; };
+  }, [isAuthenticated, viewMode]);
+
+  // Listen to Service Worker messages (e.g. click on background notification)
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+    const handleSwMessage = (event: MessageEvent) => {
+      const msg = event.data;
+      if (!msg) return;
+      if (msg.type === 'OPEN_TICKET' && (msg.ticketId || msg.code)) {
+        const found = tickets.find(t => t.id === msg.ticketId || t.code === msg.code);
+        if (found) {
+          setSelectedTicket(found);
+          setActiveTab('tickets');
+        } else {
+          syncWithServer(false);
+        }
+      } else if (msg.type === 'PUSH_RECEIVED') {
+        playTicketAlertSound();
+        syncWithServer(false);
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', handleSwMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+  }, [tickets]);
+
+  // Auto-open ticket if opened via notification click (?codigo=...)
+  useEffect(() => {
+    if (typeof window === 'undefined' || tickets.length === 0 || viewMode !== 'admin') return;
+    const params = new URLSearchParams(window.location.search);
+    const codeParam = params.get('codigo') || params.get('ticket');
+    if (codeParam && !selectedTicket) {
+      const found = tickets.find(t => t.code === codeParam || t.id === codeParam);
+      if (found) {
+        setSelectedTicket(found);
+        setActiveTab('tickets');
+      }
+    }
+  }, [tickets.length, viewMode]);
 
   const toggleSound = () => {
     const nextState = !soundEnabled;
@@ -1993,19 +2038,23 @@ export default function App() {
             )}
           </button>
 
-          {/* Native OS Desktop Notification Toggle */}
+          {/* Native OS / Service Worker Web Push Notification Toggle */}
           <button
             onClick={requestNotificationPermission}
-            className={`px-2 sm:px-2.5 py-1.5 text-[11px] sm:text-xs font-semibold rounded-lg border transition-colors flex items-center gap-1.5 ${
-              notifPermission === 'granted'
-                ? 'bg-emerald-950/60 border-emerald-500/50 text-emerald-300'
-                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+            className={`px-2 sm:px-2.5 py-1.5 text-[11px] sm:text-xs font-semibold rounded-lg border transition-colors flex items-center gap-1.5 cursor-pointer ${
+              isPushSubscribed && notifPermission === 'granted'
+                ? 'bg-emerald-950/60 border-emerald-500/50 text-emerald-300 hover:bg-emerald-900/60'
+                : 'bg-amber-950/50 border-amber-500/40 text-amber-300 hover:bg-amber-900/50'
             }`}
-            title={notifPermission === 'granted' ? 'Notificações nativas ativadas' : 'Ativar notificações nativas'}
+            title={
+              isPushSubscribed && notifPermission === 'granted'
+                ? 'Notificações Push (Service Worker) ativas mesmo com a aba fechada'
+                : 'Configurar notificações Push via Service Worker (funciona com a aba fechada)'
+            }
           >
-            <Bell className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <Bell className={`w-3.5 h-3.5 shrink-0 ${isPushSubscribed && notifPermission === 'granted' ? 'text-emerald-400' : 'text-amber-400'}`} />
             <span className="hidden sm:inline">
-              {notifPermission === 'granted' ? 'Push Ativo' : 'Push'}
+              {isPushSubscribed && notifPermission === 'granted' ? 'Push Ativo' : 'Ativar Push'}
             </span>
           </button>
 
@@ -5100,6 +5149,18 @@ export default function App() {
           }
           setSyncStatusMsg('Dados sincronizados com sucesso!');
           setTimeout(() => setSyncStatusMsg(null), 4000);
+        }}
+      />
+
+      {/* Service Worker Web Push Notification Modal */}
+      <PushNotificationModal
+        isOpen={isPushModalOpen}
+        onClose={() => setIsPushModalOpen(false)}
+        role="admin"
+        onStatusChange={(sub) => {
+          setIsPushSubscribed(sub);
+          const perm = getNotificationPermissionState();
+          if (perm !== 'unsupported') setNotifPermission(perm);
         }}
       />
 
