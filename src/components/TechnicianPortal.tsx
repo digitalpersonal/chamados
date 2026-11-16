@@ -15,7 +15,7 @@ import {
 import confetti from 'canvas-confetti';
 import { 
   Ticket, Technician, TicketStatus, EquipmentType, Priority,
-  formatSlaDate, getSlaStatus 
+  formatSlaDate, getSlaStatus, sendTicketWhatsAppCopy 
 } from '../App';
 import { isSupabaseReady } from '../lib/supabase';
 import { playTicketAlertSound, initAudioContext } from '../lib/audioNotifier';
@@ -394,7 +394,8 @@ export default function TechnicianPortal({
     } catch (e) {}
 
     playTicketAlertSound();
-    showToast('🎉 Chamado Encerrado!', `O chamado ${concludeTicket.code} foi concluído e encerrado com sucesso.`);
+    sendTicketWhatsAppCopy(updated, techName);
+    showToast('🎉 Chamado Encerrado!', `O chamado ${concludeTicket.code} foi concluído, encerrado e a cópia foi enviada via WhatsApp (35991048020).`);
   };
 
   // Add intermediate note

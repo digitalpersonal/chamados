@@ -12,6 +12,7 @@ import {
 import { EquipmentType, Priority, Ticket, TicketStatus, calculateDefaultDeadline, formatSlaDate, getSlaStatus, generateUniqueTicketCode } from '../App';
 import { saveTicketToSupabase } from '../lib/cloudDbService';
 import { fetchAndApplyServerCredentials } from '../lib/supabase';
+import { playTicketAlertSound, initAudioContext } from '../lib/audioNotifier';
 
 interface PortalServidorProps {
   departments: string[];
@@ -198,6 +199,9 @@ export default function PortalServidor({
 
       // Persist directly to Supabase Cloud Database
       saveTicketToSupabase(createdTicket, [createdTicket, ...tickets]);
+
+      initAudioContext();
+      playTicketAlertSound();
 
       setSuccessTicket(createdTicket);
       onTicketCreated(createdTicket);
@@ -412,7 +416,7 @@ export default function PortalServidor({
                   {successTicket.code}
                 </h2>
                 <p className="text-xs sm:text-sm text-slate-300 mt-2 max-w-md mx-auto">
-                  O administrador de TI da Prefeitura de Guaranésia foi notificado instantaneamente com alerta sonoro e visual na tela.
+                  A central de TI da prefeitura recebeu o alerta sonoro e visual imediato na tela! Agora, envie a confirmação para o WhatsApp do Administrador (35 99104-8020).
                 </p>
               </div>
 

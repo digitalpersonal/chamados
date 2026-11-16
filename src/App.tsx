@@ -225,6 +225,22 @@ export const normalizeTicketCodes = (tickets: Ticket[]): Ticket[] => {
   });
 };
 
+export const sendTicketWhatsAppCopy = (ticket: Ticket, authorOrInfo?: string) => {
+  const url = `https://api.whatsapp.com/send?phone=5535991048020&text=` + encodeURIComponent(
+    `*ATUALIZAÇÃO DE CHAMADO - PREFEITURA DE GUARANESIA*\n\n` +
+    `*Protocolo:* ${ticket.code}\n` +
+    `*Status:* ${ticket.status}\n` +
+    (authorOrInfo ? `*Responsável/Ação:* ${authorOrInfo}\n` : '') +
+    `*Secretaria/Setor:* ${ticket.department}\n` +
+    `*Serviço:* ${ticket.equipmentType}\n` +
+    `*Título:* ${ticket.title}\n` +
+    `*Detalhes:* ${ticket.description}`
+  );
+  if (typeof window !== 'undefined') {
+    window.open(url, '_blank');
+  }
+};
+
 export const formatSlaDate = (deadlineStr?: string): string => {
   if (!deadlineStr) return 'Não informada';
   try {
@@ -857,6 +873,7 @@ export default function App() {
   // Modals & Active View states
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [editingTicket, setEditingTicket] = useState<Ticket | null>(null);
+  const [lastCreatedTicket, setLastCreatedTicket] = useState<Ticket | null>(null);
   const [celebrationToast, setCelebrationToast] = useState<{
     code: string;
     status: TicketStatus;
@@ -996,6 +1013,7 @@ export default function App() {
     setNewTitle('');
     setNewDesc('');
     setIsNewTicketOpen(false);
+    setLastCreatedTicket(newTicketObj);
 
     // Persist directly to Supabase Cloud Database (if connected)
     saveTicketToSupabase(newTicketObj, updatedTickets);
@@ -5151,6 +5169,66 @@ export default function App() {
           setTimeout(() => setSyncStatusMsg(null), 4000);
         }}
       />
+
+      {/* WhatsApp Confirmation Modal for Admin (35991048020) upon creating new ticket */}
+      {lastCreatedTicket && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-slate-950 border border-emerald-500/50 rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden my-8 p-6 text-center space-y-5 animate-in zoom-in-95 duration-200">
+            <div className="w-16 h-16 rounded-full bg-emerald-500/20 border-2 border-emerald-500 text-emerald-400 flex items-center justify-center mx-auto">
+              <CheckCircle2 className="w-9 h-9" />
+            </div>
+
+            <div>
+              <span className="text-xs font-bold text-emerald-400 uppercase tracking-widest">
+                Chamado Cadastrado com Sucesso
+              </span>
+              <h2 className="text-2xl sm:text-3xl font-extrabold text-white mt-1">
+                {lastCreatedTicket.code}
+              </h2>
+              <p className="text-xs sm:text-sm text-slate-300 mt-2">
+                Envie agora a confirmação do atendimento para o WhatsApp do Administrador (35 99104-8020).
+              </p>
+            </div>
+
+            <div className="p-3.5 bg-slate-900 rounded-xl border border-slate-800 text-left space-y-1.5 text-xs text-slate-300">
+              <div><strong>Título:</strong> {lastCreatedTicket.title}</div>
+              <div><strong>Secretaria/Setor:</strong> {lastCreatedTicket.department}</div>
+              <div><strong>Tipo:</strong> {lastCreatedTicket.equipmentType}</div>
+              <div><strong>Prioridade:</strong> {lastCreatedTicket.priority}</div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+              <a
+                href={`https://api.whatsapp.com/send?phone=5535991048020&text=${encodeURIComponent(
+                  `*CONFIRMAÇÃO DE NOVO CHAMADO - PREFEITURA DE GUARANESIA*\n\n` +
+                  `*Protocolo:* ${lastCreatedTicket.code}\n` +
+                  `*Secretaria/Setor:* ${lastCreatedTicket.department}\n` +
+                  `*Serviço:* ${lastCreatedTicket.equipmentType}\n` +
+                  `*Título:* ${lastCreatedTicket.title}\n` +
+                  `*Descrição:* ${lastCreatedTicket.description}\n` +
+                  `*Prioridade:* ${lastCreatedTicket.priority}\n` +
+                  `*Status:* Aberto`
+                )}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setLastCreatedTicket(null)}
+                className="w-full sm:w-auto px-5 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-2 shadow-lg"
+              >
+                <PhoneCall className="w-4 h-4 text-white" />
+                <span>Enviar Confirmação WhatsApp (35 99104-8020)</span>
+              </a>
+
+              <button
+                type="button"
+                onClick={() => setLastCreatedTicket(null)}
+                className="w-full sm:w-auto px-5 py-3 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-bold border border-slate-800 transition-colors"
+              >
+                Fechar / Concluir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Service Worker Web Push Notification Modal */}
       <PushNotificationModal
